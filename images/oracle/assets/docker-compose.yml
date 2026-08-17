@@ -1,0 +1,13 @@
+services:
+  oracle:
+    image: ghcr.io/felixhertweck/ocelot-oracle:main
+    container_name: oracle
+    ports:
+      - "${ORACLE_PORT:-8080}:8080"
+    environment:
+      - ORACLE_HOST=0.0.0.0
+      - ORACLE_SCENARIO=${ORACLE_SCENARIO:-scenario-3.1}
+    volumes:
+      - ~/oracle/content:/app/content:ro
+      - ~/oracle/logs:/var/log/oracle
+    restart: unless-stopped
