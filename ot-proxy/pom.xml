@@ -16,19 +16,6 @@
   </properties>
 
   <dependencies>
-    <!-- Modbus TCP -->
-    <dependency>
-      <groupId>com.ghgande</groupId>
-      <artifactId>j2mod</artifactId>
-      <version>3.3.0</version>
-      <exclusions>
-        <exclusion>
-          <groupId>org.slf4j</groupId>
-          <artifactId>slf4j-reload4j</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-
     <!-- IEC 61850 (MMS) -->
     <dependency>
       <groupId>com.beanit</groupId>
@@ -43,22 +30,10 @@
       <version>2.6</version>
     </dependency>
 
-    <!-- Rate Limiting -->
-    <dependency>
-      <groupId>com.google.guava</groupId>
-      <artifactId>guava</artifactId>
-      <version>33.7.1-jre</version>
-    </dependency>
-
     <!-- Logging -->
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>2.0.18</version>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>log4j-over-slf4j</artifactId>
       <version>2.0.18</version>
     </dependency>
     <dependency>
