@@ -1,0 +1,16 @@
+# Local dev / smoke-testing only. The real VM9 deployment lives under images/oracle/. No
+# external backend — hint content is read directly from a mounted JSON file.
+services:
+  oracle:
+    build: .
+    container_name: oracle-dev
+    ports:
+      - "${ORACLE_PORT:-8080}:8080"
+    environment:
+      - ORACLE_SCENARIO=${ORACLE_SCENARIO:-scenario-3.1}
+    volumes:
+      - ./content/hints:/app/content:ro
+      - oracle-dev-logs:/var/log/oracle
+
+volumes:
+  oracle-dev-logs:

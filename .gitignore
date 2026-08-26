@@ -16,3 +16,6 @@ eval-harness/docker/results/*
 !eval-harness/docker/results/.gitkeep
 eval-harness/docker/.env
 eval-harness/src/.port-locks/
+
+# Oracle local dev credentials
+oracle/.env

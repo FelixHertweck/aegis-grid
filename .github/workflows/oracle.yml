@@ -1,0 +1,36 @@
+name: Oracle — Build & Publish
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "oracle/**"
+      - "!oracle/**/*.md"
+      - ".github/workflows/oracle.yml"
+    tags:
+      - "v*.*"
+      - "v*.*.*"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "oracle/**"
+      - "!oracle/**/*.md"
+      - ".github/workflows/oracle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/docker.yml
+    secrets: inherit
+    with:
+      docker-file-path: oracle/Dockerfile
+      docker-build-context: oracle
+      container-image-title: OCELOT Oracle
+      image-name: ${{ github.repository }}-oracle
