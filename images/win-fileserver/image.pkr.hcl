@@ -57,6 +57,12 @@ build {
   provisioner "windows-shell" {
     inline = [
       "powershell.exe -Command \"Start-Sleep -Seconds 60\"",
+      # Sysprep hard-fails generalize if the OS volume is encrypted (base image
+      # picks up an orphaned BitLocker/Device Encryption state - no key protector,
+      # protection off, but VolumeStatus stays FullyEncrypted until explicitly
+      # decrypted). Left running, Sysprep hangs indefinitely on an invisible error
+      # dialog instead of exiting - bounded wait here so a real problem fails loud.
+      "powershell.exe -Command \"$vol = Get-BitLockerVolume -MountPoint C:; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Disable-BitLocker -MountPoint C: | Out-Null; $t = 3600; while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') { Start-Sleep -Seconds 10; $t -= 10; $vol = Get-BitLockerVolume -MountPoint C:; Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%') }; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Write-Error 'BitLocker did not finish decrypting before timeout'; exit 1 } }\"",
       "powershell.exe -Command \"Start-Process -FilePath 'C:\\Windows\\System32\\Sysprep\\Sysprep.exe' -ArgumentList '/oobe /generalize /shutdown /unattend:C:\\Windows\\Panther\\Unattend\\unattend.xml' -Wait\"",
       "powershell.exe -Command \"Start-Sleep -Seconds 60\"",
     ]
