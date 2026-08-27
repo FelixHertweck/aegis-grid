@@ -63,8 +63,9 @@ build {
       # decrypted). Left running, Sysprep hangs indefinitely on an invisible error
       # dialog instead of exiting - bounded wait here so a real problem fails loud.
       "powershell.exe -Command \"$vol = Get-BitLockerVolume -MountPoint C:; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Disable-BitLocker -MountPoint C: | Out-Null; $t = 3600; while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') { Start-Sleep -Seconds 10; $t -= 10; $vol = Get-BitLockerVolume -MountPoint C:; Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%') }; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Write-Error 'BitLocker did not finish decrypting before timeout'; exit 1 } }\"",
+      # Sysprep's /shutdown powers the VM off as its last act - nothing after
+      # this can run over WinRM, so this must stay the final inline command.
       "powershell.exe -Command \"Start-Process -FilePath 'C:\\Windows\\System32\\Sysprep\\Sysprep.exe' -ArgumentList '/oobe /generalize /shutdown /unattend:C:\\Windows\\Panther\\Unattend\\unattend.xml' -Wait\"",
-      "powershell.exe -Command \"Start-Sleep -Seconds 60\"",
     ]
   }
 }
