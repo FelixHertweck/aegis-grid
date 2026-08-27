@@ -35,20 +35,24 @@
 
     - name: IEC 61850 client tooling
       block:
-      # A blocking or polled WinRM call over a multi-minute download/install
-      # can hit either an ordinary reset (ConnectionResetError, a ansible
-      # "failed" result) or a full "connection refused" (reported as
-      # "unreachable"). block/rescue only catches "failed" - an "unreachable"
-      # result kills the whole play outright, rescue never runs. So this
-      # can't use block/rescue: ignore_unreachable/ignore_errors keep the
-      # play alive, and the retry is driven by explicit when: conditions.
+      # A blocking WinRM call over a multi-minute download/install can hit
+      # either an ordinary reset (ConnectionResetError, a "failed" result) or
+      # a full "connection refused" (reported as "unreachable"). block/rescue
+      # only catches "failed" - an "unreachable" result kills the whole play
+      # outright, rescue never runs. So this can't use block/rescue:
+      # ignore_unreachable/ignore_errors keep the play alive, and the retry
+      # is driven by explicit when: conditions.
+      #
+      # async/poll was tried here but made things worse: its detached
+      # "watchdog" process does not reliably survive on this WinRM setup
+      # (confirmed live - the watchdog process vanished without ever writing
+      # a result, leaving Ansible polling a dead job id forever with no
+      # timeout and no error). Back to a plain blocking call.
       - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
         ansible.windows.win_get_url:
           url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
           dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
           timeout: 1800
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         ignore_errors: true
         register: jdk_dl
@@ -70,8 +74,6 @@
           url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
           dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
           timeout: 1800
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         register: jdk_dl
         when: jdk_dl is unreachable or jdk_dl is failed
@@ -81,8 +83,6 @@
           path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
           arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
           state: present
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         ignore_errors: true
         register: jdk_install

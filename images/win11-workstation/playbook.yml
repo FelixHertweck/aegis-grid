@@ -154,20 +154,24 @@
 
     - name: Ordinary user-facing software
       block:
-      # A blocking or polled WinRM call over a multi-minute download/install
-      # can hit either an ordinary reset (ConnectionResetError, a ansible
-      # "failed" result) or a full "connection refused" (reported as
-      # "unreachable"). block/rescue only catches "failed" - an "unreachable"
-      # result kills the whole play outright, rescue never runs. So this
-      # can't use block/rescue: ignore_unreachable/ignore_errors keep the
-      # play alive, and the retry is driven by explicit when: conditions.
+      # A blocking WinRM call over a multi-minute download/install can hit
+      # either an ordinary reset (ConnectionResetError, a "failed" result) or
+      # a full "connection refused" (reported as "unreachable"). block/rescue
+      # only catches "failed" - an "unreachable" result kills the whole play
+      # outright, rescue never runs. So this can't use block/rescue:
+      # ignore_unreachable/ignore_errors keep the play alive, and the retry
+      # is driven by explicit when: conditions.
+      #
+      # async/poll was tried here but made things worse: its detached
+      # "watchdog" process does not reliably survive on this WinRM setup
+      # (confirmed live - the watchdog process vanished without ever writing
+      # a result, leaving Ansible polling a dead job id forever with no
+      # timeout and no error). Back to a plain blocking call.
       - name: Download LibreOffice MSI
         ansible.windows.win_get_url:
           url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
           dest: "C:\\Windows\\Temp\\LibreOffice.msi"
           timeout: 1800
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         ignore_errors: true
         register: libreoffice_dl
@@ -189,8 +193,6 @@
           url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
           dest: "C:\\Windows\\Temp\\LibreOffice.msi"
           timeout: 1800
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         register: libreoffice_dl
         when: libreoffice_dl is unreachable or libreoffice_dl is failed
@@ -200,8 +202,6 @@
           path: "C:\\Windows\\Temp\\LibreOffice.msi"
           arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
           state: present
-        async: 1800
-        poll: 15
         ignore_unreachable: true
         ignore_errors: true
         register: libreoffice_install
