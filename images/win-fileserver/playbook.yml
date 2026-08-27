@@ -21,6 +21,30 @@
         timeout: 900
         sleep: 10
 
+    # cloudbase-init re-runs on EVERY boot and reconfigures the network a few
+    # minutes in - observed live on a build VM it renames the adapter
+    # ("Ethernet 2" -> "tap1323108a-a0") and re-applies MTU 1442. Any task
+    # holding a WinRM connection open across that moment dies with
+    # ConnectionResetError(104). Let cloudbase-init finish instead of racing
+    # it - don't just disable it, the MTU it sets is needed for this overlay
+    # network.
+    - name: Wait for cloudbase-init to finish its post-boot run
+      ansible.windows.win_shell: |
+        $s = Get-Service cloudbase-init -ErrorAction SilentlyContinue
+        if ($s -and $s.Status -ne 'Stopped') { 'RUNNING' } else { 'DONE' }
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Reconnect in case cloudbase-init bounced the network while we waited
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
+
     - name: Ensure OpenSSH Server capability is present
       ansible.windows.win_powershell:
         script: |
@@ -113,6 +137,25 @@
       ansible.windows.win_reboot:
         msg: "Rebooting to apply changes"
         reboot_timeout: 600
+
+    # Same race again on this boot - and this is the one that matters, since
+    # the long software installs all sit after this reboot.
+    - name: Wait for cloudbase-init to finish after the reboot
+      ansible.windows.win_shell: |
+        $s = Get-Service cloudbase-init -ErrorAction SilentlyContinue
+        if ($s -and $s.Status -ne 'Stopped') { 'RUNNING' } else { 'DONE' }
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Reconnect in case cloudbase-init bounced the network while we waited
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
 
     - name: RDP enabled
       block:
