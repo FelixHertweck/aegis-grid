@@ -154,14 +154,35 @@
 
     - name: Ordinary user-facing software
       block:
-      - name: Download LibreOffice MSI
-        ansible.windows.win_get_url:
-          url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
-          dest: "C:\\Windows\\Temp\\LibreOffice.msi"
-        register: libreoffice_dl
-        retries: 5
-        delay: 10
-        until: libreoffice_dl is succeeded
+      # Same WinRM-drop hazard as the install below - a plain until/retries loop
+      # already proved unable to survive a [Errno 104] mid-download (it retried
+      # once on an ordinary failure, then died on the next hard connection
+      # exception). Remove any partial file before retrying: win_get_url without
+      # force only checks the destination exists, not that it's complete.
+      - name: Download LibreOffice MSI (survives a WinRM reset mid-download)
+        block:
+          - name: Download LibreOffice MSI
+            ansible.windows.win_get_url:
+              url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
+              dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+            register: libreoffice_dl
+        rescue:
+          - name: WinRM dropped mid-download - wait for it to come back
+            ansible.builtin.wait_for_connection:
+              timeout: 600
+              sleep: 10
+          - name: Remove any partial download before retrying
+            ansible.windows.win_file:
+              path: "C:\\Windows\\Temp\\LibreOffice.msi"
+              state: absent
+          - name: Retry LibreOffice MSI download
+            ansible.windows.win_get_url:
+              url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
+              dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+            register: libreoffice_dl
+            until: libreoffice_dl is succeeded
+            retries: 5
+            delay: 15
 
       # The LibreOffice MSI keeps one synchronous WinRM operation open for the
       # full multi-minute install; a mid-install [Errno 104] reset is common on

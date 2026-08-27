@@ -35,14 +35,35 @@
 
     - name: IEC 61850 client tooling
       block:
-      - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
-        ansible.windows.win_get_url:
-          url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
-          dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-        register: jdk_dl
-        retries: 5
-        delay: 10
-        until: jdk_dl is succeeded
+      # Same WinRM-drop hazard as the LibreOffice download in the imported base
+      # playbook: a plain until/retries loop retried once on an ordinary
+      # failure, then died on the next hard connection exception. Remove any
+      # partial file before retrying - win_get_url without force only checks
+      # the destination exists, not that it's complete.
+      - name: Download Eclipse Temurin 21 JDK (survives a WinRM reset mid-download)
+        block:
+          - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
+            ansible.windows.win_get_url:
+              url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
+              dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+            register: jdk_dl
+        rescue:
+          - name: WinRM dropped mid-download - wait for it to come back
+            ansible.builtin.wait_for_connection:
+              timeout: 600
+              sleep: 10
+          - name: Remove any partial download before retrying
+            ansible.windows.win_file:
+              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+              state: absent
+          - name: Retry Eclipse Temurin 21 JDK download
+            ansible.windows.win_get_url:
+              url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
+              dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+            register: jdk_dl
+            until: jdk_dl is succeeded
+            retries: 5
+            delay: 15
 
       # Same WinRM-drop hazard as the LibreOffice MSI in the imported base
       # playbook: catch a mid-install [Errno 104] reset, wait for WinRM, re-assert.
