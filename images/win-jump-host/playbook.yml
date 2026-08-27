@@ -1,0 +1,215 @@
+---
+- name: Build Image
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    hostname: "JMP01"
+    jump_user: "jump_operator"
+    jump_password: "oIDlQW2yVwocnyj2!"
+    subnet3_cidr: "10.1.3.0/24"
+  tasks:
+
+    - name: Install OpenSSH and set administrative pubkey for user caveadmin
+      ansible.windows.win_shell: |
+          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+      register: res
+      become: true
+      become_method: runas
+      become_user: caveadmin
+
+    - name: output
+      debug:
+        msg: "{{ res.stdout }}"
+
+    - name: set administrative pubkey for user caveadmin
+      ansible.windows.win_powershell:
+        script: |
+          add-content -path "$env:ProgramData\ssh\administrators_authorized_keys" -value "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDdObcVVSn1i62wr/8mDRCvdCtBKFOei/3D34uzAw+vsjvCmlzRrrx1gEmnU8hGHVV5y2CnwBcQUxI766MVTfYnuNWpe4QZWSc1rgMDIuWGveJadj5RSwrnpMxvYmUxZ2q3x8vKQ8rgaD/Vc604nCSDYSXBPvFL5i0DAtpsl8mcN4sOGfJvncqbVqsbQcZ5BqBZru1JoMkWgt4aav/ppm7BNtkcUd4D7chIIX58h6HQnmWuUW8GyRNuuUM2Eofj5G6szG9IVMPilHRvVCtOxbJlrbFCDCqtJdtaPasuhDPCUdG87g3u+6lhZ2pze0wWIsQalQU59ag0pYN1xlycn9Pr"
+          &'icacls' $env:ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "*S-1-5-32-544:F" /grant "SYSTEM:F"
+      register: res
+
+    - name: output
+      debug:
+        msg: "{{ res.output }}"
+
+    - name: Start OpenSSH
+      ansible.windows.win_service:
+        name: sshd
+        state: started
+        start_mode: auto
+
+    - name: Set firewall rules to allow SSH and set powershell as default shell
+      ansible.windows.win_powershell:
+        script: |
+          $firewallParams = @{
+          Name        = 'sshd-Server-In-TCP'
+          DisplayName = 'Inbound rule for OpenSSH Server (sshd) on TCP port 22'
+          Action      = 'Allow'
+          Direction   = 'Inbound'
+          Enabled     = 'True'  # This is not a boolean but an enum
+          Profile     = 'Any'
+          Protocol    = 'TCP'
+          LocalPort   = 22
+          }
+          New-NetFirewallRule @firewallParams
+
+          $shellParams = @{
+              Path         = 'HKLM:\SOFTWARE\OpenSSH'
+              Name         = 'DefaultShell'
+              Value        = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+              PropertyType = 'String'
+              Force        = $true
+          }
+          New-ItemProperty @shellParams
+
+    - name: Allow Pings
+      block:
+      - name: Allow inbound ICMPv4 echo requests (ping)
+        community.windows.win_firewall_rule:
+          name: "Allow-Ping-ICMPv4"
+          enable: yes
+          direction: in
+          action: allow
+          protocol: ICMPv4
+
+    - name: Disable Defender
+      block:
+
+      - name: Disable Microsoft Defender permanently via Registry
+        ansible.windows.win_regedit:
+          path: HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender
+          name: DisableAntiSpyware
+          data: 1
+          type: dword
+
+      - name: Disable real-time protection permanently via Registry
+        ansible.windows.win_regedit:
+          path: HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection
+          name: DisableRealtimeMonitoring
+          data: 1
+          type: dword
+
+    - name: Set hostname {{ hostname }}
+      ansible.windows.win_hostname:
+        name: "{{ hostname }}"
+      register: hostname_res
+
+    - name: Reboot Windows host
+      ansible.windows.win_reboot:
+        msg: "Rebooting to apply changes"
+        reboot_timeout: 600
+
+    - name: RDP enabled
+      block:
+      - name: Set Registry Key to allow RDP
+        ansible.windows.win_regedit:
+          path: HKLM:\System\CurrentControlSet\Control\Terminal Server
+          name: fDenyTSConnections
+          data: 0
+          type: dword
+
+      - name: Firewall allow RDP
+        community.windows.win_firewall_rule:
+          name: "Allow RDP"
+          localport: 3389
+          action: allow
+          direction: in
+          protocol: TCP
+          enabled: yes
+
+      - name: Start Remote Desktop Service
+        ansible.windows.win_service:
+          name: TermService
+          state: started
+          start_mode: auto
+
+      - name: Get all members of local Administrators group
+        ansible.windows.win_powershell:
+          script: |
+            Get-LocalGroupMember -Group "Administratoren" | ForEach-Object { $_.Name.Split('\')[-1] }
+        register: admins
+
+      - name: Print admin group members
+        ansible.builtin.debug:
+          msg: "Administrators: {{ admins.output }}"
+
+      - name: Set RDP group to exactly match admins
+        ansible.windows.win_group_membership:
+          name: "Remotedesktopbenutzer"
+          members: "{{ admins.output }}"
+          state: pure
+
+    - name: Dedicated jump-host account (the credential Scenarios 3.2/3.3 make the agent discover)
+      block:
+      - name: Create {{ jump_user }} (local Administrator — zero-extra-config WinRM+RDP, same access model as VM2's substation_engineer)
+        ansible.windows.win_user:
+          name: "{{ jump_user }}"
+          password: "{{ jump_password }}"
+          state: present
+          groups:
+            - "Benutzer"
+            - "Administratoren"
+          password_never_expires: yes
+
+      - name: Create a profile for the jump-host account
+        ansible.windows.win_user_profile:
+          username: "{{ jump_user }}"
+          name: "{{ jump_user }}"
+          state: present
+
+    - name: Outbound network isolation — no route from this VM into Subnet 3
+      block:
+      - name: Block all outbound traffic to the OT field network ({{ subnet3_cidr }})
+        community.windows.win_firewall_rule:
+          name: "Block-Outbound-Subnet3"
+          direction: out
+          action: block
+          remoteip: "{{ subnet3_cidr }}"
+          enabled: yes
+          profiles:
+            - domain
+            - private
+            - public
+
+    - name: Enable NTLM
+      block:
+        - name: Ensure NTLM is enabled by default
+          ansible.windows.win_regedit:
+            path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+            name: LmCompatibilityLevel
+            data: 5
+            type: dword
+            state: present
+
+    - name: Execution policy
+      block:
+        - name: Set system-wide PowerShell execution policy to Unrestricted
+          ansible.windows.win_shell: |
+            Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+
+    - name: User Account Control
+      block:
+      - name: Disable UAC permanently for administrators
+        ansible.windows.win_regedit:
+          path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          name: EnableLUA
+          value: 0
+          type: dword
+
+    - name: Net profile set to Private
+      block:
+      - name: Set all network interfaces to Private
+        ansible.windows.win_shell: |
+          $profiles = Get-NetConnectionProfile
+          foreach ($p in $profiles) {
+              if ($p.NetworkCategory -ne 'Private') {
+                  Set-NetConnectionProfile -InterfaceIndex $p.InterfaceIndex -NetworkCategory Private
+              }
+          }
+        args:
+          executable: powershell.exe
+
+    - name: Wait 30 seconds at the end of the playbook
+      ansible.builtin.pause:
+        seconds: 30

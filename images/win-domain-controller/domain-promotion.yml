@@ -1,0 +1,110 @@
+---
+# Deploy-time only — NOT a Packer provisioner. Windows refuses `sysprep /generalize` on an
+# already-promoted domain controller, so this cannot be baked into image.pkr.hcl the way
+# playbook.yml's baseline hygiene is. Run this once, after the instance built from this
+# image's Packer output has booted and is reachable:
+#
+#   ansible-playbook -i '<DC_IP>,' domain-promotion.yml \
+#     -e ansible_user=caveadmin -e ansible_password='<the unattend.xml AdministratorPassword>' \
+#     -c winrm -e ansible_winrm_transport=ntlm -e ansible_winrm_server_cert_validation=ignore \
+#     -e ansible_port=5985 -e ansible_winrm_scheme=http
+#
+# Mirrors the split already used for day4/DC01 and day5/01-dc in cave-images: golden image
+# stays generic/generalizable, promotion + AD content is a separate live-host run.
+
+- name: Promote to Domain Controller and seed Scenario 3.3 AD content
+  hosts: all
+  gather_facts: no
+  vars:
+    domain_name: "corp.local"
+    domain_netbios_name: "CORP"
+    safe_mode_password: "Zt8rKmQ5nHvLpX2!"
+    domain_admin_user: "CORP\\ad_admin"
+
+  tasks:
+    - name: Wait until WinRM is available
+      wait_for_connection:
+        timeout: 300
+
+    - name: Install new AD forest
+      microsoft.ad.domain:
+        dns_domain_name: "{{ domain_name }}"
+        domain_mode: WinThreshold
+        forest_mode: WinThreshold
+        domain_netbios_name: "{{ domain_netbios_name }}"
+        safe_mode_password: "{{ safe_mode_password }}"
+        database_path: "C:\\Windows\\NTDS"
+        log_path: "C:\\Windows\\NTDS"
+        sysvol_path: "C:\\Windows\\SYSVOL"
+        install_dns: yes
+        create_dns_delegation: no
+        reboot: true
+        reboot_timeout: 600
+
+    - name: Wait until WinRM is available
+      wait_for_connection:
+        timeout: 300
+        sleep: 10
+
+    - name: Wait until AD is ready
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            Get-ADDomain -ErrorAction Stop | Out-Null
+            Write-Output "READY"
+          } catch {
+            Write-Output "FAILED"
+          }
+      register: addomain_check
+      retries: 20
+      delay: 30
+      until: "'READY' in addomain_check.output"
+
+    - name: Copy AD content script (Path B account + ad_admin, DCSync stays disabled) to remote host
+      ansible.windows.win_copy:
+        src: ./VulnAD.ps1
+        dest: C:\Windows\Temp\VulnAD.ps1
+
+    - name: Execute the AD content script and display output
+      ansible.windows.win_powershell:
+        script: C:\Windows\Temp\VulnAD.ps1
+      register: ps_result
+      no_log: false
+
+    - name: Print PS script output
+      debug:
+        msg: "{{ ps_result }}"
+
+    - name: Remove AD content script after execution
+      ansible.windows.win_file:
+        path: C:\Windows\Temp\VulnAD.ps1
+        state: absent
+
+    - name: Disable global local-admin "caveadmin" account on the DC
+      block:
+        - name: Write the disable-caveadmin script (ad_admin, already local Administrators via Domain Admins, takes over from here)
+          ansible.windows.win_copy:
+            dest: C:\Windows\Temp\disable.ps1
+            content: |
+              net.exe user caveadmin /active:no
+
+              Remove-Item "C:\Windows\Temp\disable.ps1" -Force
+
+        - name: Get system time +5 minutes on Windows
+          ansible.windows.win_shell: |
+            (Get-Date).AddMinutes(5).ToString('yyyy-MM-ddTHH:mm:ss')
+          register: time_plus_5
+
+        - name: Schedule one-time task to disable caveadmin in 5 minutes
+          community.windows.win_scheduled_task:
+            name: disableTask
+            description: "Disable caveadmin"
+            actions:
+              - path: powershell.exe
+                arguments: -NoProfile -ExecutionPolicy Bypass -File "C:\Windows\Temp\disable.ps1"
+            triggers:
+              - type: time
+                start_boundary: "{{ time_plus_5.stdout | trim }}"
+            username: SYSTEM
+            run_level: highest
+            state: present

@@ -1,0 +1,78 @@
+---
+- import_playbook: ../win11-workstation/playbook.yml
+
+- name: Configure VM2 (Engineering Workstation)
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    vm2_user: "substation_engineer"
+    vm2_password: "u8y63mo5iLUYNeOu#"
+  tasks:
+
+    - name: Wait until WinRM is available
+      wait_for_connection:
+        timeout: 300
+        sleep: 10
+
+    - name: VM2's own local account (Scenario 3.2/3.3 credential set)
+      block:
+      - name: Create VM2 account
+        ansible.windows.win_user:
+          name: "{{ vm2_user }}"
+          password: "{{ vm2_password }}"
+          state: present
+          groups:
+            - "Benutzer"
+            - "Administratoren"
+          password_never_expires: yes
+
+      - name: Create a profile for the VM2 account
+        ansible.windows.win_user_profile:
+          username: "{{ vm2_user }}"
+          name: "{{ vm2_user }}"
+          state: present
+
+    - name: IEC 61850 client tooling
+      block:
+      - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
+        ansible.windows.win_get_url:
+          url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
+          dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+        register: jdk_dl
+        retries: 5
+        delay: 10
+        until: jdk_dl is succeeded
+
+      - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
+          state: present
+
+      - name: Create iec61850bean tool directory
+        ansible.windows.win_file:
+          path: "C:\\Tools\\iec61850bean\\lib"
+          state: directory
+
+      - name: Download iec61850bean and its runtime dependencies
+        ansible.windows.win_get_url:
+          url: "{{ item.url }}"
+          dest: "C:\\Tools\\iec61850bean\\lib\\{{ item.name }}"
+        loop:
+          - { name: "iec61850bean-1.9.0.jar", url: "https://repo1.maven.org/maven2/com/beanit/iec61850bean/1.9.0/iec61850bean-1.9.0.jar" }
+          - { name: "asn1bean-1.12.0.jar", url: "https://repo1.maven.org/maven2/com/beanit/asn1bean/1.12.0/asn1bean-1.12.0.jar" }
+          - { name: "slf4j-api-1.7.25.jar", url: "https://repo1.maven.org/maven2/org/slf4j/slf4j-api/1.7.25/slf4j-api-1.7.25.jar" }
+          - { name: "logback-classic-1.2.3.jar", url: "https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.2.3/logback-classic-1.2.3.jar" }
+          - { name: "logback-core-1.2.3.jar", url: "https://repo1.maven.org/maven2/ch/qos/logback/logback-core/1.2.3/logback-core-1.2.3.jar" }
+        register: jar_dl
+        retries: 5
+        delay: 10
+        until: jar_dl is succeeded
+
+      - name: Place console-client launcher (mirrors upstream bin/iec61850bean-console-client.bat)
+        ansible.windows.win_copy:
+          dest: "C:\\Tools\\iec61850bean\\iec61850bean-console-client.bat"
+          content: |
+            @echo off
+            java -cp "C:\Tools\iec61850bean\lib\*" com.beanit.iec61850bean.app.ConsoleClient %*
