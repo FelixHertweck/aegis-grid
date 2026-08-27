@@ -35,7 +35,7 @@ foothold user. Baked into every build regardless of scenario; in the simplest sc
 still uses the shared `caveadmin` account like the rest of the IT fleet (no separate discovery
 step needed there), so this account just goes dormant.
 
-- **Access model:** the account is a **local Administrator** (`Administratoren` group), not a
+- **Access model:** the account is a **local Administrator** (`Administrators` group), not a
   restricted standard user. That's what makes both WinRM and RDP work with zero extra
   configuration on top of what the base playbook already sets up:
   - **WinRM** — the default WinRM security descriptor (SDDL) trusts `BUILTIN\Administrators`, so an
@@ -44,7 +44,7 @@ step needed there), so this account just goes dormant.
     (which the base playbook already does); that permission doesn't depend on Remote Desktop Users
     group membership the way it would for a standard user.
   - A standard-user account would need an explicit `Remote Management Users` grant for WinRM and
-    `Remotedesktopbenutzer` group membership for RDP — skipped here in favor of matching the
+    `Remote Desktop Users` group membership for RDP — skipped here in favor of matching the
     same access model `caveadmin` already uses everywhere else in the testbed.
 - **Not enough on its own for scenarios that require separate credentials here — `caveadmin` must
   be separately disabled.** This image doesn't do that (it's scenario-agnostic, built once). Since

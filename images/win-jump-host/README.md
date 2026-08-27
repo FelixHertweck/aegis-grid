@@ -21,7 +21,7 @@ be sufficient for actuation on its own.
   fleet-wide `caveadmin` one — same pattern `win-fileserver` uses and for the same reason: if
   `caveadmin` still worked here, an attacker could skip straight from any corporate-IT host to
   this bastion without ever needing to find the dedicated credential below.
-- **A dedicated `jump_operator` local account** (`Administratoren` group, via `win_user` +
+- **A dedicated `jump_operator` local account** (`Administrators` group, via `win_user` +
   `win_user_profile` — same access-model reasoning as the engineering-workstation image's
   dedicated account: local admin gets WinRM and RDP with zero extra grants) — this is the
   credential an attacker is meant to discover and use to reach this host, baked into the image

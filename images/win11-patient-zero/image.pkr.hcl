@@ -25,8 +25,7 @@ source "openstack" "windows-patient-zero" {
   networks            = ["39a7e47a-f481-485a-9569-239258173b30"]
   floating_ip_network = "d118259f-1b00-462a-8293-999e1ddbe43e"
   security_groups     = ["open"]
-  winrm_timeout = "5m"
-  pause_before_connecting = "2m"
+  winrm_timeout = "30m"
 }
 
 build {
@@ -40,10 +39,13 @@ build {
       "-f", "1",
       "-c", "winrm",
       "-e", "ansible_password=changeme",
+      "-e", "ansible_shell_type=cmd",
       "-e", "ansible_winrm_transport=ntlm",
       "-e", "ansible_winrm_server_cert_validation=ignore",
       "-e", "ansible_port=5985",
-      "-e", "ansible_winrm_scheme=http"
+      "-e", "ansible_winrm_scheme=http",
+      "-e", "ansible_winrm_operation_timeout_sec=120",
+      "-e", "ansible_winrm_read_timeout_sec=150"
     ]
   }
 

@@ -23,8 +23,8 @@
           password: "{{ vm2_password }}"
           state: present
           groups:
-            - "Benutzer"
-            - "Administratoren"
+            - "Users"
+            - "Administrators"
           password_never_expires: yes
 
       - name: Create a profile for the VM2 account

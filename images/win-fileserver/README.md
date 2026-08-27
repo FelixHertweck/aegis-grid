@@ -22,10 +22,10 @@ Windows Server 2022 base already exists on the OpenStack cluster (see
 - **`unattend.xml`** based on `win11-workstation`'s (same sysprep pass, already proven to work
   against `server2k22` — `day4/golden_image` uses an identical template), **but with a
   host-specific `AdministratorPassword`/`AutoLogon` password**, not the fleet-wide one.
-- **A dedicated `fileserver_reader` local account** (`Benutzer` group only, not `Administratoren`),
+- **A dedicated `fileserver_reader` local account** (`Users` group only, not `Administrators`),
   created via `win_user` in `playbook.yml` — the credential a mapped drive elsewhere in the
-  network (see below) actually authenticates as. Already covered by the share's `Authentifizierte
-  Benutzer` ACL, no separate grant needed.
+  network (see below) actually authenticates as. Already covered by the share's `Authenticated
+  Users` ACL, no separate grant needed.
 
 ## `caveadmin` on this image
 
@@ -87,7 +87,7 @@ provisioned before this runs against the other workstation.
   credentials too. Deliberately left out of this pass — exact wording/placement is an open
   calibration detail, same status as the engineering-workstation image's `engineering-files/`.
 - **A domain-joined, gated variant.** One scenario needs this host domain-joined and the share
-  ACL narrowed from `Authentifizierte Benutzer` down to just the AD group backing a cracked
+  ACL narrowed from `Authenticated Users` down to just the AD group backing a cracked
   Kerberoastable service account. Domain join has to happen against a live DC after boot — it
   can't be baked into a sysprep'd/generalized image (see `day4/MKT-FS`, `FIN-SRV`, `RPT-SRV` in
   `cave-images`, which are deploy-time-only playbooks for the same reason) — so this is a

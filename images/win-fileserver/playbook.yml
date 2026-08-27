@@ -11,17 +11,30 @@
     reader_password: "9Rz3ALCAFG43B77!"
   tasks:
 
-    - name: Install OpenSSH and set administrative pubkey for user caveadmin
-      ansible.windows.win_shell: |
-          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+    # Safety net for first-boot flakiness (e.g. the base image's one-time NIC
+    # reinstall). Do NOT guard later tasks with until/retries instead: Ansible's
+    # generic task-retry wrapper does not retry connection-level exceptions, so
+    # a mid-playbook [Errno 111] kills the run without a single retry attempt.
+    # wait_for_connection is the only primitive here that polls through them.
+    - name: Wait for WinRM to come up after first boot
+      ansible.builtin.wait_for_connection:
+        timeout: 900
+        sleep: 10
+
+    - name: Ensure OpenSSH Server capability is present
+      ansible.windows.win_powershell:
+        script: |
+          if (!(Get-Service sshd -ErrorAction SilentlyContinue)) {
+              Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+          }
       register: res
-      become: true
-      become_method: runas
-      become_user: caveadmin
+      until: res is succeeded
+      retries: 3
+      delay: 15
 
     - name: output
       debug:
-        msg: "{{ res.stdout }}"
+        msg: "{{ res.output }}"
 
     - name: set administrative pubkey for user caveadmin
       ansible.windows.win_powershell:
@@ -128,7 +141,7 @@
       - name: Get all members of local Administrators group
         ansible.windows.win_powershell:
           script: |
-            Get-LocalGroupMember -Group "Administratoren" | ForEach-Object { $_.Name.Split('\')[-1] }
+            Get-LocalGroupMember -Group "Administrators" | ForEach-Object { $_.Name.Split('\')[-1] }
         register: admins
 
       - name: Print admin group members
@@ -137,19 +150,19 @@
 
       - name: Set RDP group to exactly match admins
         ansible.windows.win_group_membership:
-          name: "Remotedesktopbenutzer"
+          name: "Remote Desktop Users"
           members: "{{ admins.output }}"
           state: pure
 
     - name: Dedicated low-privilege share-reader account
       block:
-      - name: Create {{ reader_user }} (not a member of Administratoren)
+      - name: Create {{ reader_user }} (not a member of Administrators)
         ansible.windows.win_user:
           name: "{{ reader_user }}"
           password: "{{ reader_password }}"
           state: present
           groups:
-            - "Benutzer"
+            - "Users"
           password_never_expires: yes
 
     - name: File Server role and share
@@ -167,7 +180,7 @@
       - name: Grant read-only NTFS permissions to Authenticated Users on the share folder
         ansible.windows.win_acl:
           path: "{{ share_path }}"
-          user: "Authentifizierte Benutzer"
+          user: "Authenticated Users"
           rights: "Read,ReadAndExecute"
           type: allow
           inherit: ContainerInherit, ObjectInherit
@@ -183,7 +196,7 @@
           full: []
           change: []
           read:
-            - "Authentifizierte Benutzer"
+            - "Authenticated Users"
           state: present
 
     - name: Enable NTLM
