@@ -399,3 +399,118 @@
       ansible.builtin.wait_for_connection:
         timeout: 600
         sleep: 10
+
+    # unattend.xml + Sysprep used to run as Packer's own "file"/"windows-shell"
+    # provisioners - a separate, native WinRM connection with none of the
+    # retry/reconnect resilience above. That gap is what killed the build
+    # here: the file upload succeeded, then the very next connection
+    # windows-shell opened hit the same cloudbase-init-driven instability
+    # and died outright ("401 - invalid content type"), no retry attempted
+    # at all. Folding both into Ansible reuses the same proven safety net.
+    - name: Upload unattend.xml for Sysprep
+      ansible.windows.win_copy:
+        src: "unattend.xml"
+        dest: "C:\\Windows\\Panther\\Unattend\\unattend.xml"
+
+    # Sysprep hard-fails generalize if the OS volume is encrypted (base image
+    # picks up an orphaned BitLocker/Device Encryption state - no key
+    # protector, protection off, but VolumeStatus stays FullyEncrypted until
+    # explicitly decrypted). Bounded wait so a real problem fails loud.
+    - name: Decrypt the OS volume if BitLocker/Device Encryption is on
+      ansible.windows.win_powershell:
+        script: |
+          $vol = Get-BitLockerVolume -MountPoint C:
+          if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+            Disable-BitLocker -MountPoint C: | Out-Null
+            $t = 3600
+            while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') {
+              Start-Sleep -Seconds 10
+              $t -= 10
+              $vol = Get-BitLockerVolume -MountPoint C:
+              Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%')
+            }
+            if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+              Write-Error 'BitLocker did not finish decrypting before timeout'
+              exit 1
+            }
+          }
+      register: bitlocker_check
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: WinRM dropped during the BitLocker check - wait for it to come back
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
+      when: bitlocker_check is unreachable or bitlocker_check is failed
+
+    - name: Retry the BitLocker check (idempotent - no-ops if already decrypted)
+      ansible.windows.win_powershell:
+        script: |
+          $vol = Get-BitLockerVolume -MountPoint C:
+          if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+            Disable-BitLocker -MountPoint C: | Out-Null
+            $t = 3600
+            while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') {
+              Start-Sleep -Seconds 10
+              $t -= 10
+              $vol = Get-BitLockerVolume -MountPoint C:
+              Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%')
+            }
+            if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+              Write-Error 'BitLocker did not finish decrypting before timeout'
+              exit 1
+            }
+          }
+      when: bitlocker_check is unreachable or bitlocker_check is failed
+
+    # /quit (not /shutdown): closes Sysprep after generalizing without
+    # touching power state, so the WinRM response makes it back reliably -
+    # Packer's own openstack builder stops the instance via the OpenStack
+    # API after provisioning succeeds (StepStopServer), it doesn't need the
+    # guest to shut itself down. Bounded at 30 min and checked against the
+    # ImageState registry marker instead of trusting -Wait forever: a
+    # validation failure inside Sysprep (BitLocker orphan state, pending
+    # servicing, or anything not yet seen) hangs the process rather than
+    # exiting with an error.
+    - name: Run Sysprep (generalize)
+      ansible.windows.win_powershell:
+        script: |
+          $proc = Start-Process -FilePath 'C:\Windows\System32\Sysprep\Sysprep.exe' -ArgumentList '/oobe /generalize /quit /unattend:C:\Windows\Panther\Unattend\unattend.xml' -PassThru
+          if (-not $proc.WaitForExit(1800000)) {
+            Write-Error 'Sysprep did not exit within 30 minutes - see C:\Windows\System32\Sysprep\Panther\setuperr.log'
+            exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "Sysprep exited with code $($proc.ExitCode)"
+            exit 1
+          }
+          $state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+          Write-Output "ImageState: $state"
+          if ($state -ne 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE') {
+            Write-Error "Sysprep did not reach the expected generalized state (got: $state)"
+            exit 1
+          }
+      register: sysprep_run
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: WinRM dropped during Sysprep - wait for it to come back
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
+      when: sysprep_run is unreachable or sysprep_run is failed
+
+    - name: Check whether Sysprep actually completed despite the drop (do not re-run it - not safely repeatable)
+      ansible.windows.win_powershell:
+        script: |
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+      register: sysprep_state
+      when: sysprep_run is unreachable or sysprep_run is failed
+
+    - name: Fail if Sysprep did not reach the generalized state
+      ansible.builtin.fail:
+        msg: "Sysprep state after reconnect: {{ sysprep_state.output[0] | default('unknown') }} (expected IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE)"
+      when:
+        - sysprep_run is unreachable or sysprep_run is failed
+        - sysprep_state.output is not defined or sysprep_state.output[0] != 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE'
