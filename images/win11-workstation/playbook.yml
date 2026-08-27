@@ -15,6 +15,15 @@
         timeout: 900
         sleep: 10
 
+    # Heavy MSI installers (LibreOffice ~360 MB) run inside a single wsmprovhost
+    # shell and can starve it or hold the WinRM channel open long enough for the
+    # floating-IP NAT to drop the connection. Give the shell more headroom now;
+    # the reboot task below makes the WSMan changes effective before the installs.
+    - name: Loosen WinRM shell limits for heavy MSI installers
+      ansible.windows.win_shell: |
+        Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 2048
+        Set-Item WSMan:\localhost\MaxTimeoutms 1800000
+
     - name: Ensure OpenSSH Server capability is present
       ansible.windows.win_powershell:
         script: |
@@ -163,11 +172,33 @@
         delay: 10
         until: libreoffice_dl is succeeded
 
-      - name: Install LibreOffice
-        ansible.windows.win_package:
-          path: "C:\\Windows\\Temp\\LibreOffice.msi"
-          arguments: "/quiet /norestart"
-          state: present
+      # The LibreOffice MSI keeps one synchronous WinRM operation open for the
+      # full multi-minute install; a mid-install [Errno 104] reset is common on
+      # this build path. The install almost always finishes on the box anyway,
+      # so catch the drop, wait for WinRM, and re-assert. until/retries here is
+      # safe because a still-running msiexec fails with 1618 (a normal module
+      # result), not a connection-level exception.
+      - name: Install LibreOffice (survives a WinRM reset during the MSI)
+        block:
+          - name: Install LibreOffice
+            ansible.windows.win_package:
+              path: "C:\\Windows\\Temp\\LibreOffice.msi"
+              arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
+              state: present
+        rescue:
+          - name: WinRM dropped mid-MSI - wait for it to come back
+            ansible.builtin.wait_for_connection:
+              timeout: 600
+              sleep: 10
+          - name: Finish / verify LibreOffice install
+            ansible.windows.win_package:
+              path: "C:\\Windows\\Temp\\LibreOffice.msi"
+              arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
+              state: present
+            register: libreoffice_install
+            until: libreoffice_install is succeeded
+            retries: 10
+            delay: 30
 
       - name: Download 7-Zip
         ansible.windows.win_get_url:

@@ -44,8 +44,8 @@ build {
       "-e", "ansible_winrm_server_cert_validation=ignore",
       "-e", "ansible_port=5985",
       "-e", "ansible_winrm_scheme=http",
-      "-e", "ansible_winrm_operation_timeout_sec=120",
-      "-e", "ansible_winrm_read_timeout_sec=150"
+      "-e", "ansible_winrm_operation_timeout_sec=45",
+      "-e", "ansible_winrm_read_timeout_sec=70"
     ]
   }
 

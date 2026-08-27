@@ -44,11 +44,29 @@
         delay: 10
         until: jdk_dl is succeeded
 
+      # Same WinRM-drop hazard as the LibreOffice MSI in the imported base
+      # playbook: catch a mid-install [Errno 104] reset, wait for WinRM, re-assert.
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
-        ansible.windows.win_package:
-          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-          arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
-          state: present
+        block:
+          - name: Install Temurin JDK
+            ansible.windows.win_package:
+              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+              arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
+              state: present
+        rescue:
+          - name: WinRM dropped mid-MSI - wait for it to come back
+            ansible.builtin.wait_for_connection:
+              timeout: 600
+              sleep: 10
+          - name: Finish / verify Temurin JDK install
+            ansible.windows.win_package:
+              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+              arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
+              state: present
+            register: jdk_install
+            until: jdk_install is succeeded
+            retries: 10
+            delay: 30
 
       - name: Create iec61850bean tool directory
         ansible.windows.win_file:
