@@ -48,6 +48,14 @@
       # (confirmed live - the watchdog process vanished without ever writing
       # a result, leaving Ansible polling a dead job id forever with no
       # timeout and no error). Back to a plain blocking call.
+      #
+      # Ansible keeps one WinRM connection open and reuses it for every task
+      # in the play. By this point it's been alive across dozens of earlier
+      # tasks - reset it before handing it a multi-minute download, instead
+      # of only finding out it's gone stale after the download fails.
+      - name: Reset the WinRM connection before the long download
+        ansible.builtin.meta: reset_connection
+
       - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
         ansible.windows.win_get_url:
           url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
@@ -77,6 +85,9 @@
         ignore_unreachable: true
         register: jdk_dl
         when: jdk_dl is unreachable or jdk_dl is failed
+
+      - name: Reset the WinRM connection before the long install
+        ansible.builtin.meta: reset_connection
 
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
         ansible.windows.win_package:
