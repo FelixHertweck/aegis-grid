@@ -63,16 +63,9 @@ build {
       # decrypted). Left running, Sysprep hangs indefinitely on an invisible error
       # dialog instead of exiting - bounded wait here so a real problem fails loud.
       "powershell.exe -Command \"$vol = Get-BitLockerVolume -MountPoint C:; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Disable-BitLocker -MountPoint C: | Out-Null; $t = 3600; while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') { Start-Sleep -Seconds 10; $t -= 10; $vol = Get-BitLockerVolume -MountPoint C:; Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%') }; if ($vol.VolumeStatus -ne 'FullyDecrypted') { Write-Error 'BitLocker did not finish decrypting before timeout'; exit 1 } }\"",
-      # /quit (not /shutdown): the WinRM command needs to return cleanly so
-      # Packer sees the provisioner succeed. With /shutdown, the VM powers
-      # off mid-command and the connection dies before a response ever comes
-      # back, which Packer reports as a provisioning failure - even though
-      # Sysprep itself completed fine on the box (confirmed live: full image
-      # never got built despite Ansible + Sysprep both finishing cleanly).
-      # Packer's own openstack builder stops the instance via the OpenStack
-      # API after provisioning succeeds (StepStopServer), so it doesn't need
-      # the guest to shut itself down at all.
-      "powershell.exe -Command \"Start-Process -FilePath 'C:\\Windows\\System32\\Sysprep\\Sysprep.exe' -ArgumentList '/oobe /generalize /quit /unattend:C:\\Windows\\Panther\\Unattend\\unattend.xml' -Wait\"",
+      # Run Sysprep with /quit -Wait, then trigger a 10s delayed shutdown (shutdown /s /t 10).
+      # This ensures PowerShell/WinRM returns exit code 0 to Packer cleanly before the connection drops.
+      "powershell.exe -Command \"Start-Process -FilePath 'C:\\Windows\\System32\\Sysprep\\Sysprep.exe' -ArgumentList '/oobe /generalize /quit /unattend:C:\\Windows\\Panther\\Unattend\\unattend.xml' -Wait; shutdown /s /t 10\"",
     ]
   }
 }
