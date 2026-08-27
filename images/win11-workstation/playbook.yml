@@ -15,15 +15,6 @@
         timeout: 900
         sleep: 10
 
-    # Heavy MSI installers (LibreOffice ~360 MB) run inside a single wsmprovhost
-    # shell and can starve it or hold the WinRM channel open long enough for the
-    # floating-IP NAT to drop the connection. Give the shell more headroom now;
-    # the reboot task below makes the WSMan changes effective before the installs.
-    - name: Loosen WinRM shell limits for heavy MSI installers
-      ansible.windows.win_shell: |
-        Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 2048
-        Set-Item WSMan:\localhost\MaxTimeoutms 1800000
-
     - name: Ensure OpenSSH Server capability is present
       ansible.windows.win_powershell:
         script: |
