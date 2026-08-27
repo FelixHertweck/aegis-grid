@@ -224,3 +224,34 @@
     - name: Wait 30 seconds at the end of the playbook
       ansible.builtin.pause:
         seconds: 30
+
+    # Sysprep validates that no update/servicing operation is pending
+    # ("reserved storage in use") and, just like the BitLocker case, doesn't
+    # exit cleanly on that failure - it just hangs forever instead. Installing
+    # Windows Capabilities (OpenSSH, RSAT) above leaves a pending reboot/CBS
+    # state that trips this validation. Confirmed live: RebootPending and
+    # RebootRequired were both true, and Sysprep's own log showed exactly
+    # this failure (hr = 0x800F0975) the moment it started, with the process
+    # then sitting idle for hours instead of returning an error. One more
+    # reboot right before Sysprep clears that state.
+    - name: Reboot to clear any pending servicing operations before Sysprep
+      ansible.windows.win_reboot:
+        msg: "Rebooting to clear pending updates before Sysprep"
+        reboot_timeout: 600
+
+    - name: Wait for cloudbase-init to finish after the pre-Sysprep reboot
+      ansible.windows.win_shell: |
+        $s = Get-Service cloudbase-init -ErrorAction SilentlyContinue
+        if ($s -and $s.Status -ne 'Stopped') { 'RUNNING' } else { 'DONE' }
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Reconnect in case cloudbase-init bounced the network while we waited
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
