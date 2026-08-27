@@ -35,66 +35,75 @@
 
     - name: IEC 61850 client tooling
       block:
-      # A blocking win_get_url/win_package call holds one WinRM command open
-      # for the whole multi-minute download/install, and something on this
-      # network path resets long-lived idle-ish connections (repeated
-      # ConnectionResetError(104), independent of the module's own 30s HTTP
-      # timeout fixed above). async/poll runs the module as a detached
-      # background process and only ever holds short polling connections
-      # open, so a mid-transfer reset can no longer kill the task outright.
-      # rescue stays as a last-resort fallback for the kickoff/poll call
-      # itself getting reset.
-      - name: Download Eclipse Temurin 21 JDK (survives a WinRM reset mid-download)
-        block:
-          - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
-            ansible.windows.win_get_url:
-              url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
-              dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-              timeout: 1800
-            async: 1800
-            poll: 15
-            register: jdk_dl
-        rescue:
-          - name: WinRM dropped mid-download - wait for it to come back
-            ansible.builtin.wait_for_connection:
-              timeout: 600
-              sleep: 10
-          - name: Remove any partial download before retrying
-            ansible.windows.win_file:
-              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-              state: absent
-          - name: Retry Eclipse Temurin 21 JDK download
-            ansible.windows.win_get_url:
-              url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
-              dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-              timeout: 1800
-            async: 1800
-            poll: 15
-            register: jdk_dl
+      # A blocking or polled WinRM call over a multi-minute download/install
+      # can hit either an ordinary reset (ConnectionResetError, a ansible
+      # "failed" result) or a full "connection refused" (reported as
+      # "unreachable"). block/rescue only catches "failed" - an "unreachable"
+      # result kills the whole play outright, rescue never runs. So this
+      # can't use block/rescue: ignore_unreachable/ignore_errors keep the
+      # play alive, and the retry is driven by explicit when: conditions.
+      - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
+        ansible.windows.win_get_url:
+          url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
+          dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          timeout: 1800
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        ignore_errors: true
+        register: jdk_dl
+
+      - name: WinRM dropped mid-download - wait for it to come back
+        ansible.builtin.wait_for_connection:
+          timeout: 600
+          sleep: 10
+        when: jdk_dl is unreachable or jdk_dl is failed
+
+      - name: Remove any partial download before retrying
+        ansible.windows.win_file:
+          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          state: absent
+        when: jdk_dl is unreachable or jdk_dl is failed
+
+      - name: Retry Eclipse Temurin 21 JDK download
+        ansible.windows.win_get_url:
+          url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
+          dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          timeout: 1800
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        register: jdk_dl
+        when: jdk_dl is unreachable or jdk_dl is failed
 
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
-        block:
-          - name: Install Temurin JDK
-            ansible.windows.win_package:
-              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-              arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
-              state: present
-            async: 1800
-            poll: 15
-        rescue:
-          - name: WinRM dropped mid-MSI - wait for it to come back
-            ansible.builtin.wait_for_connection:
-              timeout: 600
-              sleep: 10
-          - name: Finish / verify Temurin JDK install
-            ansible.windows.win_package:
-              path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-              arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
-              state: present
-            register: jdk_install
-            until: jdk_install is succeeded
-            retries: 10
-            delay: 30
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
+          state: present
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        ignore_errors: true
+        register: jdk_install
+
+      - name: WinRM dropped mid-MSI - wait for it to come back
+        ansible.builtin.wait_for_connection:
+          timeout: 600
+          sleep: 10
+        when: jdk_install is unreachable or jdk_install is failed
+
+      - name: Finish / verify Temurin JDK install
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+          arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
+          state: present
+        register: jdk_install
+        ignore_unreachable: true
+        until: jdk_install is succeeded
+        retries: 10
+        delay: 30
+        when: jdk_install is unreachable or jdk_install is failed
 
       - name: Create iec61850bean tool directory
         ansible.windows.win_file:

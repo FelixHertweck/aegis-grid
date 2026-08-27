@@ -154,66 +154,75 @@
 
     - name: Ordinary user-facing software
       block:
-      # A blocking win_get_url/win_package call holds one WinRM command open
-      # for the whole multi-minute download/install, and something on this
-      # network path resets long-lived idle-ish connections (repeated
-      # ConnectionResetError(104), independent of the module's own 30s HTTP
-      # timeout fixed above). async/poll runs the module as a detached
-      # background process and only ever holds short polling connections
-      # open, so a mid-transfer reset can no longer kill the task outright.
-      # rescue stays as a last-resort fallback for the kickoff/poll call
-      # itself getting reset.
-      - name: Download LibreOffice MSI (survives a WinRM reset mid-download)
-        block:
-          - name: Download LibreOffice MSI
-            ansible.windows.win_get_url:
-              url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
-              dest: "C:\\Windows\\Temp\\LibreOffice.msi"
-              timeout: 1800
-            async: 1800
-            poll: 15
-            register: libreoffice_dl
-        rescue:
-          - name: WinRM dropped mid-download - wait for it to come back
-            ansible.builtin.wait_for_connection:
-              timeout: 600
-              sleep: 10
-          - name: Remove any partial download before retrying
-            ansible.windows.win_file:
-              path: "C:\\Windows\\Temp\\LibreOffice.msi"
-              state: absent
-          - name: Retry LibreOffice MSI download
-            ansible.windows.win_get_url:
-              url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
-              dest: "C:\\Windows\\Temp\\LibreOffice.msi"
-              timeout: 1800
-            async: 1800
-            poll: 15
-            register: libreoffice_dl
+      # A blocking or polled WinRM call over a multi-minute download/install
+      # can hit either an ordinary reset (ConnectionResetError, a ansible
+      # "failed" result) or a full "connection refused" (reported as
+      # "unreachable"). block/rescue only catches "failed" - an "unreachable"
+      # result kills the whole play outright, rescue never runs. So this
+      # can't use block/rescue: ignore_unreachable/ignore_errors keep the
+      # play alive, and the retry is driven by explicit when: conditions.
+      - name: Download LibreOffice MSI
+        ansible.windows.win_get_url:
+          url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
+          dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+          timeout: 1800
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        ignore_errors: true
+        register: libreoffice_dl
 
-      - name: Install LibreOffice (survives a WinRM reset during the MSI)
-        block:
-          - name: Install LibreOffice
-            ansible.windows.win_package:
-              path: "C:\\Windows\\Temp\\LibreOffice.msi"
-              arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
-              state: present
-            async: 1800
-            poll: 15
-        rescue:
-          - name: WinRM dropped mid-MSI - wait for it to come back
-            ansible.builtin.wait_for_connection:
-              timeout: 600
-              sleep: 10
-          - name: Finish / verify LibreOffice install
-            ansible.windows.win_package:
-              path: "C:\\Windows\\Temp\\LibreOffice.msi"
-              arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
-              state: present
-            register: libreoffice_install
-            until: libreoffice_install is succeeded
-            retries: 10
-            delay: 30
+      - name: WinRM dropped mid-download - wait for it to come back
+        ansible.builtin.wait_for_connection:
+          timeout: 600
+          sleep: 10
+        when: libreoffice_dl is unreachable or libreoffice_dl is failed
+
+      - name: Remove any partial download before retrying
+        ansible.windows.win_file:
+          path: "C:\\Windows\\Temp\\LibreOffice.msi"
+          state: absent
+        when: libreoffice_dl is unreachable or libreoffice_dl is failed
+
+      - name: Retry LibreOffice MSI download
+        ansible.windows.win_get_url:
+          url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
+          dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+          timeout: 1800
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        register: libreoffice_dl
+        when: libreoffice_dl is unreachable or libreoffice_dl is failed
+
+      - name: Install LibreOffice
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\LibreOffice.msi"
+          arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
+          state: present
+        async: 1800
+        poll: 15
+        ignore_unreachable: true
+        ignore_errors: true
+        register: libreoffice_install
+
+      - name: WinRM dropped mid-MSI - wait for it to come back
+        ansible.builtin.wait_for_connection:
+          timeout: 600
+          sleep: 10
+        when: libreoffice_install is unreachable or libreoffice_install is failed
+
+      - name: Finish / verify LibreOffice install
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\LibreOffice.msi"
+          arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
+          state: present
+        register: libreoffice_install
+        ignore_unreachable: true
+        until: libreoffice_install is succeeded
+        retries: 10
+        delay: 30
+        when: libreoffice_install is unreachable or libreoffice_install is failed
 
       - name: Download 7-Zip
         ansible.windows.win_get_url:
