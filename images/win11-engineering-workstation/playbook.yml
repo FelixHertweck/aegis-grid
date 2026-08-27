@@ -35,60 +35,25 @@
 
     - name: IEC 61850 client tooling
       block:
-      # A blocking WinRM call over a multi-minute download/install can hit
-      # either an ordinary reset (ConnectionResetError, a "failed" result) or
-      # a full "connection refused" (reported as "unreachable"). block/rescue
-      # only catches "failed" - an "unreachable" result kills the whole play
-      # outright, rescue never runs. So this can't use block/rescue:
-      # ignore_unreachable/ignore_errors keep the play alive, and the retry
-      # is driven by explicit when: conditions.
-      #
-      # async/poll was tried here but made things worse: its detached
-      # "watchdog" process does not reliably survive on this WinRM setup
-      # (confirmed live - the watchdog process vanished without ever writing
-      # a result, leaving Ansible polling a dead job id forever with no
-      # timeout and no error). Back to a plain blocking call.
-      #
-      # Ansible keeps one WinRM connection open and reuses it for every task
-      # in the play. By this point it's been alive across dozens of earlier
-      # tasks - reset it before handing it a multi-minute download, instead
-      # of only finding out it's gone stale after the download fails.
-      - name: Reset the WinRM connection before the long download
-        ansible.builtin.meta: reset_connection
-
+      # Measured from a build VM this comes off GitHub at ~76 MB/s (171 MB
+      # in ~2s), so it needs no special handling - unlike the LibreOffice
+      # download in the imported base playbook, which was only fragile
+      # because its throttled archive host took ~26 minutes.
       - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
         ansible.windows.win_get_url:
           url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
           dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-          timeout: 1800
-        ignore_unreachable: true
-        ignore_errors: true
-        register: jdk_dl
-
-      - name: WinRM dropped mid-download - wait for it to come back
-        ansible.builtin.wait_for_connection:
           timeout: 600
-          sleep: 10
-        when: jdk_dl is unreachable or jdk_dl is failed
-
-      - name: Remove any partial download before retrying
-        ansible.windows.win_file:
-          path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-          state: absent
-        when: jdk_dl is unreachable or jdk_dl is failed
-
-      - name: Retry Eclipse Temurin 21 JDK download
-        ansible.windows.win_get_url:
-          url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
-          dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
-          timeout: 1800
-        ignore_unreachable: true
         register: jdk_dl
-        when: jdk_dl is unreachable or jdk_dl is failed
+        until: jdk_dl is succeeded
+        retries: 3
+        delay: 10
 
-      - name: Reset the WinRM connection before the long install
-        ansible.builtin.meta: reset_connection
-
+      # The MSI install still holds one WinRM operation open for several
+      # minutes, which is long enough to get reset - so this half keeps its
+      # recovery path. rescue: can't be used: a reset can surface as
+      # "unreachable", which rescue never catches, so ignore_unreachable
+      # keeps the play alive and the retry is driven by when:.
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
         ansible.windows.win_package:
           path: "C:\\Windows\\Temp\\temurin-jdk21.msi"

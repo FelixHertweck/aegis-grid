@@ -154,60 +154,30 @@
 
     - name: Ordinary user-facing software
       block:
-      # A blocking WinRM call over a multi-minute download/install can hit
-      # either an ordinary reset (ConnectionResetError, a "failed" result) or
-      # a full "connection refused" (reported as "unreachable"). block/rescue
-      # only catches "failed" - an "unreachable" result kills the whole play
-      # outright, rescue never runs. So this can't use block/rescue:
-      # ignore_unreachable/ignore_errors keep the play alive, and the retry
-      # is driven by explicit when: conditions.
-      #
-      # async/poll was tried here but made things worse: its detached
-      # "watchdog" process does not reliably survive on this WinRM setup
-      # (confirmed live - the watchdog process vanished without ever writing
-      # a result, leaving Ansible polling a dead job id forever with no
-      # timeout and no error). Back to a plain blocking call.
-      #
-      # Ansible keeps one WinRM connection open and reuses it for every task
-      # in the play. By this point it's been alive across dozens of earlier
-      # tasks - reset it before handing it a multi-minute download, instead
-      # of only finding out it's gone stale after the download fails.
-      - name: Reset the WinRM connection before the long download
-        ansible.builtin.meta: reset_connection
-
+      # Pinned to a fast mirror on purpose. The upstream
+      # downloadarchive.documentfoundation.org host that serves /old/
+      # releases is throttled hard: measured from a build VM it delivered
+      # 0.22 MB/s, so this 349 MB file needed ~26 minutes and no WinRM
+      # connection survives being held open for a single operation that
+      # long. Every "connection reset" failure on this task traced back to
+      # that, not to the download logic. The same file off ftp.fau.de runs
+      # at ~125 MB/s (~3s). 25.8.7 rather than 25.8.2.2 because the fast
+      # mirrors only carry current stable, never the /old/ archive.
       - name: Download LibreOffice MSI
         ansible.windows.win_get_url:
-          url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
+          url: "https://ftp.fau.de/tdf/libreoffice/stable/25.8.7/win/x86_64/LibreOffice_25.8.7_Win_x86-64.msi"
           dest: "C:\\Windows\\Temp\\LibreOffice.msi"
-          timeout: 1800
-        ignore_unreachable: true
-        ignore_errors: true
-        register: libreoffice_dl
-
-      - name: WinRM dropped mid-download - wait for it to come back
-        ansible.builtin.wait_for_connection:
           timeout: 600
-          sleep: 10
-        when: libreoffice_dl is unreachable or libreoffice_dl is failed
-
-      - name: Remove any partial download before retrying
-        ansible.windows.win_file:
-          path: "C:\\Windows\\Temp\\LibreOffice.msi"
-          state: absent
-        when: libreoffice_dl is unreachable or libreoffice_dl is failed
-
-      - name: Retry LibreOffice MSI download
-        ansible.windows.win_get_url:
-          url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
-          dest: "C:\\Windows\\Temp\\LibreOffice.msi"
-          timeout: 1800
-        ignore_unreachable: true
         register: libreoffice_dl
-        when: libreoffice_dl is unreachable or libreoffice_dl is failed
+        until: libreoffice_dl is succeeded
+        retries: 3
+        delay: 10
 
-      - name: Reset the WinRM connection before the long install
-        ansible.builtin.meta: reset_connection
-
+      # The MSI install still holds one WinRM operation open for several
+      # minutes, which is long enough to get reset - so this half keeps its
+      # recovery path. rescue: can't be used: a reset can surface as
+      # "unreachable", which rescue never catches, so ignore_unreachable
+      # keeps the play alive and the retry is driven by when:.
       - name: Install LibreOffice
         ansible.windows.win_package:
           path: "C:\\Windows\\Temp\\LibreOffice.msi"
