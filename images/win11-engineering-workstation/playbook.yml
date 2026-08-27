@@ -115,6 +115,11 @@
     # windows-shell opened hit the same cloudbase-init-driven instability
     # and died outright ("401 - invalid content type"), no retry attempted
     # at all. Folding both into Ansible reuses the same proven safety net.
+    - name: Ensure the Panther\Unattend directory exists
+      ansible.windows.win_file:
+        path: "C:\\Windows\\Panther\\Unattend"
+        state: directory
+
     - name: Upload unattend.xml for Sysprep
       ansible.windows.win_copy:
         src: "unattend.xml"
