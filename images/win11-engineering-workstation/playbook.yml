@@ -35,17 +35,20 @@
 
     - name: IEC 61850 client tooling
       block:
-      # Same WinRM-drop hazard as the LibreOffice download in the imported base
-      # playbook: a plain until/retries loop retried once on an ordinary
-      # failure, then died on the next hard connection exception. Remove any
-      # partial file before retrying - win_get_url without force only checks
-      # the destination exists, not that it's complete.
+      # win_get_url's HTTP request timeout defaults to 30s, way too short for a
+      # ~180MB file - raised explicitly (see the LibreOffice download in the
+      # imported base playbook for the elapsed=30s evidence). Also guard the
+      # separate WinRM-drop hazard: a plain until/retries loop retried once on
+      # an ordinary failure, then died on the next hard connection exception.
+      # Remove any partial file before retrying - win_get_url without force
+      # only checks the destination exists, not that it's complete.
       - name: Download Eclipse Temurin 21 JDK (survives a WinRM reset mid-download)
         block:
           - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
             ansible.windows.win_get_url:
               url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
               dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+              timeout: 1800
             register: jdk_dl
         rescue:
           - name: WinRM dropped mid-download - wait for it to come back
@@ -60,6 +63,7 @@
             ansible.windows.win_get_url:
               url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
               dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
+              timeout: 1800
             register: jdk_dl
             until: jdk_dl is succeeded
             retries: 5

@@ -154,17 +154,20 @@
 
     - name: Ordinary user-facing software
       block:
-      # Same WinRM-drop hazard as the install below - a plain until/retries loop
-      # already proved unable to survive a [Errno 104] mid-download (it retried
-      # once on an ordinary failure, then died on the next hard connection
-      # exception). Remove any partial file before retrying: win_get_url without
-      # force only checks the destination exists, not that it's complete.
+      # win_get_url's HTTP request timeout defaults to 30s, way too short for a
+      # ~300MB file - that alone killed this download ("operation has timed
+      # out" at elapsed=30s), so timeout is raised explicitly. Also guard the
+      # separate WinRM-drop hazard: a plain until/retries loop already proved
+      # unable to survive a [Errno 104] mid-download. Remove any partial file
+      # before retrying: win_get_url without force only checks the destination
+      # exists, not that it's complete.
       - name: Download LibreOffice MSI (survives a WinRM reset mid-download)
         block:
           - name: Download LibreOffice MSI
             ansible.windows.win_get_url:
               url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
               dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+              timeout: 1800
             register: libreoffice_dl
         rescue:
           - name: WinRM dropped mid-download - wait for it to come back
@@ -179,6 +182,7 @@
             ansible.windows.win_get_url:
               url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
               dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+              timeout: 1800
             register: libreoffice_dl
             until: libreoffice_dl is succeeded
             retries: 5
