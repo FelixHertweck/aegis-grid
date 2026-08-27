@@ -154,13 +154,15 @@
 
     - name: Ordinary user-facing software
       block:
-      # win_get_url's HTTP request timeout defaults to 30s, way too short for a
-      # ~300MB file - that alone killed this download ("operation has timed
-      # out" at elapsed=30s), so timeout is raised explicitly. Also guard the
-      # separate WinRM-drop hazard: a plain until/retries loop already proved
-      # unable to survive a [Errno 104] mid-download. Remove any partial file
-      # before retrying: win_get_url without force only checks the destination
-      # exists, not that it's complete.
+      # A blocking win_get_url/win_package call holds one WinRM command open
+      # for the whole multi-minute download/install, and something on this
+      # network path resets long-lived idle-ish connections (repeated
+      # ConnectionResetError(104), independent of the module's own 30s HTTP
+      # timeout fixed above). async/poll runs the module as a detached
+      # background process and only ever holds short polling connections
+      # open, so a mid-transfer reset can no longer kill the task outright.
+      # rescue stays as a last-resort fallback for the kickoff/poll call
+      # itself getting reset.
       - name: Download LibreOffice MSI (survives a WinRM reset mid-download)
         block:
           - name: Download LibreOffice MSI
@@ -168,6 +170,8 @@
               url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
               dest: "C:\\Windows\\Temp\\LibreOffice.msi"
               timeout: 1800
+            async: 1800
+            poll: 15
             register: libreoffice_dl
         rescue:
           - name: WinRM dropped mid-download - wait for it to come back
@@ -183,17 +187,10 @@
               url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.2.2/win/x86_64/LibreOffice_25.8.2.2_Win_x86-64.msi"
               dest: "C:\\Windows\\Temp\\LibreOffice.msi"
               timeout: 1800
+            async: 1800
+            poll: 15
             register: libreoffice_dl
-            until: libreoffice_dl is succeeded
-            retries: 5
-            delay: 15
 
-      # The LibreOffice MSI keeps one synchronous WinRM operation open for the
-      # full multi-minute install; a mid-install [Errno 104] reset is common on
-      # this build path. The install almost always finishes on the box anyway,
-      # so catch the drop, wait for WinRM, and re-assert. until/retries here is
-      # safe because a still-running msiexec fails with 1618 (a normal module
-      # result), not a connection-level exception.
       - name: Install LibreOffice (survives a WinRM reset during the MSI)
         block:
           - name: Install LibreOffice
@@ -201,6 +198,8 @@
               path: "C:\\Windows\\Temp\\LibreOffice.msi"
               arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
               state: present
+            async: 1800
+            poll: 15
         rescue:
           - name: WinRM dropped mid-MSI - wait for it to come back
             ansible.builtin.wait_for_connection:

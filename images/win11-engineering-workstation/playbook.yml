@@ -35,13 +35,15 @@
 
     - name: IEC 61850 client tooling
       block:
-      # win_get_url's HTTP request timeout defaults to 30s, way too short for a
-      # ~180MB file - raised explicitly (see the LibreOffice download in the
-      # imported base playbook for the elapsed=30s evidence). Also guard the
-      # separate WinRM-drop hazard: a plain until/retries loop retried once on
-      # an ordinary failure, then died on the next hard connection exception.
-      # Remove any partial file before retrying - win_get_url without force
-      # only checks the destination exists, not that it's complete.
+      # A blocking win_get_url/win_package call holds one WinRM command open
+      # for the whole multi-minute download/install, and something on this
+      # network path resets long-lived idle-ish connections (repeated
+      # ConnectionResetError(104), independent of the module's own 30s HTTP
+      # timeout fixed above). async/poll runs the module as a detached
+      # background process and only ever holds short polling connections
+      # open, so a mid-transfer reset can no longer kill the task outright.
+      # rescue stays as a last-resort fallback for the kickoff/poll call
+      # itself getting reset.
       - name: Download Eclipse Temurin 21 JDK (survives a WinRM reset mid-download)
         block:
           - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
@@ -49,6 +51,8 @@
               url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
               dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
               timeout: 1800
+            async: 1800
+            poll: 15
             register: jdk_dl
         rescue:
           - name: WinRM dropped mid-download - wait for it to come back
@@ -64,13 +68,10 @@
               url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
               dest: "C:\\Windows\\Temp\\temurin-jdk21.msi"
               timeout: 1800
+            async: 1800
+            poll: 15
             register: jdk_dl
-            until: jdk_dl is succeeded
-            retries: 5
-            delay: 15
 
-      # Same WinRM-drop hazard as the LibreOffice MSI in the imported base
-      # playbook: catch a mid-install [Errno 104] reset, wait for WinRM, re-assert.
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
         block:
           - name: Install Temurin JDK
@@ -78,6 +79,8 @@
               path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
               arguments: "ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome /quiet"
               state: present
+            async: 1800
+            poll: 15
         rescue:
           - name: WinRM dropped mid-MSI - wait for it to come back
             ansible.builtin.wait_for_connection:
