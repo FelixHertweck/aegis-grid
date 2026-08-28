@@ -6,6 +6,38 @@
   gather_facts: no
   become: no
   vars:
+    # Positive proof that cloudbase-init has already RUN on THIS boot - not
+    # merely that its service happens to sit at 'Stopped' right now. Straight
+    # after a reboot the service usually has not started yet, so the old
+    # "Status -ne Stopped -> done" check returned DONE on the very first try
+    # and the play walked straight into the network reconfiguration it was
+    # supposed to wait out. Requiring a log write newer than LastBootUpTime
+    # tells "not started yet" apart from "ran and exited".
+    cbi_probe: |
+      $svcs = @(Get-Service -Name 'cloudbase-init*' -ErrorAction SilentlyContinue)
+      if ($svcs.Count -eq 0) { Write-Output 'DONE - no cloudbase-init service on this image'; exit 0 }
+      $busy = @($svcs | Where-Object { $_.Status -ne 'Stopped' })
+      if ($busy.Count -gt 0) {
+        $names = ($busy | ForEach-Object { $_.Name + '=' + $_.Status }) -join ' '
+        Write-Output "RUNNING - $names"
+        exit 0
+      }
+      $boot = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+      $logs = @(Get-ChildItem -ErrorAction SilentlyContinue -Path @(
+        'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\log\*.log',
+        'C:\Program Files (x86)\Cloudbase Solutions\Cloudbase-Init\log\*.log'))
+      if ($logs.Count -eq 0) {
+        $up = ((Get-Date) - $boot).TotalSeconds
+        if ($up -lt 300) { Write-Output ('RUNNING - no log to check, only ' + [int]$up + 's since boot'); exit 0 }
+        Write-Output 'DONE - no cloudbase-init log, settle window elapsed'
+        exit 0
+      }
+      $newest = ($logs | Sort-Object LastWriteTime -Descending)[0]
+      if ($newest.LastWriteTime -lt $boot) {
+        Write-Output ('RUNNING - stopped, but has not logged since boot (' + $newest.LastWriteTime + ' < ' + $boot + ')')
+        exit 0
+      }
+      Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
     foothold_user: "employee"
     foothold_password: "3xNtNk7Ntjkhq26o"
   tasks:
@@ -52,13 +84,69 @@
         }
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
-    # unattend.xml + Sysprep used to run as Packer's own "file"/"windows-shell"
-    # provisioners - a separate, native WinRM connection with none of the
-    # retry/reconnect resilience above. That gap is what killed the build
-    # here: the file upload succeeded, then the very next connection
-    # windows-shell opened hit the same cloudbase-init-driven instability
-    # and died outright ("401 - invalid content type"), no retry attempted
-    # at all. Folding both into Ansible reuses the same proven safety net.
+    # Sysprep validates that no update/servicing operation is pending
+    # ("reserved storage in use") and, just like the BitLocker case, doesn't
+    # exit cleanly on that failure - it just hangs forever instead. Installing
+    # Windows Capabilities (OpenSSH, RSAT) above leaves a pending reboot/CBS
+    # state that trips this validation. Confirmed live: RebootPending and
+    # RebootRequired were both true, and Sysprep's own log showed exactly
+    # this failure (hr = 0x800F0975) the moment it started, with the process
+    # then sitting idle for hours instead of returning an error. One more
+    # reboot right before Sysprep clears that state.
+    - name: Reboot to clear any pending servicing operations before Sysprep
+      ansible.windows.win_reboot:
+        msg: "Rebooting to clear pending updates before Sysprep"
+        reboot_timeout: 900
+        post_reboot_delay: 60
+
+    # Two traps here, both of which bit us. First, the probe must not believe
+    # a service that has not started yet (see cbi_probe). Second, the wait
+    # itself gets cut off by the very disruption it is waiting out; it is
+    # ignored so the play survives, but then nothing re-checked and we
+    # continued while cloudbase-init was still working - that is what left
+    # the box unreachable later on. Ansible's until/retries cannot ride
+    # through an unreachable result (the until expression references
+    # cbi.stdout, which an unreachable result does not have, and that aborts
+    # the retry loop), so the recovery has to be explicit: reconnect, probe
+    # again, and only the last pass is authoritative.
+    - name: Wait for cloudbase-init to finish (pre-Sysprep reboot, pass 1)
+      ansible.windows.win_shell: "{{ cbi_probe }}"
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Reconnect after the cloudbase-init window (pre-Sysprep reboot, pass 1)
+      ansible.builtin.wait_for_connection:
+        timeout: 1800
+        sleep: 15
+
+    - name: Wait for cloudbase-init to finish (pre-Sysprep reboot, pass 2)
+      ansible.windows.win_shell: "{{ cbi_probe }}"
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Reconnect after the cloudbase-init window (pre-Sysprep reboot, pass 2)
+      ansible.builtin.wait_for_connection:
+        timeout: 1800
+        sleep: 15
+
+    - name: Confirm cloudbase-init is really done (pre-Sysprep reboot)
+      ansible.windows.win_shell: "{{ cbi_probe }}"
+      register: cbi
+      changed_when: false
+      until: cbi.stdout is defined and cbi.stdout is search('DONE')
+      retries: 60
+      delay: 10
+
     - name: Ensure the Panther\Unattend directory exists
       ansible.windows.win_file:
         path: "C:\\Windows\\Panther\\Unattend"
@@ -97,8 +185,8 @@
 
     - name: WinRM dropped during the BitLocker check - wait for it to come back
       ansible.builtin.wait_for_connection:
-        timeout: 600
-        sleep: 10
+        timeout: 900
+        sleep: 15
       when: bitlocker_check is unreachable or bitlocker_check is failed
 
     - name: Retry the BitLocker check (idempotent - no-ops if already decrypted)
@@ -121,53 +209,148 @@
           }
       when: bitlocker_check is unreachable or bitlocker_check is failed
 
-    # /quit (not /shutdown): closes Sysprep after generalizing without
-    # touching power state, so the WinRM response makes it back reliably -
-    # Packer's own openstack builder stops the instance via the OpenStack
-    # API after provisioning succeeds (StepStopServer), it doesn't need the
-    # guest to shut itself down. Bounded at 30 min and checked against the
-    # ImageState registry marker instead of trusting -Wait forever: a
-    # validation failure inside Sysprep (BitLocker orphan state, pending
-    # servicing, or anything not yet seen) hangs the process rather than
-    # exiting with an error.
-    - name: Run Sysprep (generalize)
-      ansible.windows.win_powershell:
-        script: |
-          $proc = Start-Process -FilePath 'C:\Windows\System32\Sysprep\Sysprep.exe' -ArgumentList '/oobe /generalize /quit /unattend:C:\Windows\Panther\Unattend\unattend.xml' -PassThru
-          if (-not $proc.WaitForExit(1800000)) {
-            Write-Error 'Sysprep did not exit within 30 minutes - see C:\Windows\System32\Sysprep\Panther\setuperr.log'
-            exit 1
+    # Sysprep is the one step that cannot be run inside a single held-open
+    # WinRM call: /generalize tears the WinRM listener down as part of the
+    # generalize pass, and the run takes minutes. The previous build died on
+    # a plain TCP connect timeout before Sysprep had even been launched, and
+    # the box then stayed unreachable for 640s - longer than the 600s
+    # reconnect window.
+    #
+    # So launch it detached as a SYSTEM scheduled task. Unlike Ansible's
+    # async watchdog (proven not to survive on these VMs), the Task Scheduler
+    # owns the process, so it does not care what happens to WinRM. The runner
+    # writes its verdict to a marker file and powers the box off ONLY on
+    # success, which makes the outcome decidable without WinRM having to
+    # survive generalize:
+    #   marker says OK / ImageState generalized  -> success
+    #   marker says FAILED / TIMEOUT / ERROR     -> fail loud, with the reason
+    #   box gone and never comes back            -> the runner reached its
+    #                                               shutdown line, so success
+    #   box back up but not generalized          -> fail loud
+    # Packer's openstack builder stops the instance via the API afterwards and
+    # tolerates it already being off, so powering down here is safe.
+    # Sysprep is never re-run on a connection drop: /generalize is not
+    # safely repeatable.
+    - name: Make sure the box is reachable before starting Sysprep
+      ansible.builtin.wait_for_connection:
+        timeout: 1800
+        sleep: 15
+
+    - name: Drop any stale Sysprep result marker
+      ansible.windows.win_file:
+        path: C:\Windows\Temp\sysprep-result.txt
+        state: absent
+
+    - name: Stage the detached Sysprep runner
+      ansible.windows.win_copy:
+        dest: C:\Windows\Temp\run-sysprep.ps1
+        content: |
+          $ErrorActionPreference = 'Stop'
+          $marker = 'C:\Windows\Temp\sysprep-result.txt'
+          try {
+              Set-Content -Path $marker -Value 'RUNNING' -Encoding ASCII
+              $p = Start-Process -FilePath 'C:\Windows\System32\Sysprep\Sysprep.exe' -PassThru -ArgumentList '/oobe', '/generalize', '/quiet', '/quit', '/unattend:C:\Windows\Panther\Unattend\unattend.xml'
+              $null = $p.Handle  # cache the handle or ExitCode comes back null
+              if (-not $p.WaitForExit(1800000)) {
+                  Set-Content -Path $marker -Value 'TIMEOUT - sysprep still running after 30 minutes' -Encoding ASCII
+                  exit 1
+              }
+              $state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+              if ($p.ExitCode -ne 0) {
+                  Set-Content -Path $marker -Value "FAILED - sysprep exit code $($p.ExitCode), ImageState=$state" -Encoding ASCII
+                  exit 1
+              }
+              if ($state -ne 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE') {
+                  Set-Content -Path $marker -Value "FAILED - unexpected ImageState=$state" -Encoding ASCII
+                  exit 1
+              }
+              Set-Content -Path $marker -Value "OK: ImageState=$state" -Encoding ASCII
+          } catch {
+              Set-Content -Path $marker -Value "ERROR - $($_.Exception.Message)" -Encoding ASCII
+              exit 1
           }
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "Sysprep exited with code $($proc.ExitCode)"
-            exit 1
-          }
-          $state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
-          Write-Output "ImageState: $state"
-          if ($state -ne 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE') {
-            Write-Error "Sysprep did not reach the expected generalized state (got: $state)"
-            exit 1
-          }
-      register: sysprep_run
+          Start-Process -FilePath 'shutdown.exe' -ArgumentList '/s', '/t', '30', '/f'
+          & schtasks.exe /Delete /TN OcelotSysprep /F | Out-Null
+
+    - name: Launch Sysprep detached via the task scheduler
+      ansible.windows.win_shell: |
+        if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') {
+          Write-Output 'ALREADY LAUNCHED - runner already wrote its marker'
+          exit 0
+        }
+        $tr = 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -NoProfile -File C:\Windows\Temp\run-sysprep.ps1'
+        & schtasks.exe /Create /TN OcelotSysprep /TR $tr /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F
+        if ($LASTEXITCODE -ne 0) { throw "schtasks /Create failed ($LASTEXITCODE)" }
+        & schtasks.exe /Run /TN OcelotSysprep
+        if ($LASTEXITCODE -ne 0) { throw "schtasks /Run failed ($LASTEXITCODE)" }
+        Write-Output 'LAUNCHED'
+      register: sysprep_launch
+      changed_when: true
+      until: sysprep_launch.stdout is defined and sysprep_launch.stdout is search('LAUNCHED')
+      retries: 10
+      delay: 30
+
+    # Short polls: a dropped one costs a retry, not the build. The until
+    # deliberately breaks out when stdout is missing - that means the box has
+    # gone away, which is the expected end state, and there is no point
+    # polling an absent host for another 30 minutes.
+    - name: Wait for Sysprep to report a verdict
+      ansible.windows.win_shell: |
+        if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') {
+          (Get-Content 'C:\Windows\Temp\sysprep-result.txt' -Raw).Trim()
+        } else {
+          'PENDING - marker not written yet'
+        }
+      register: sysprep_poll
+      changed_when: false
+      until: sysprep_poll.stdout is not defined or sysprep_poll.stdout is search('OK:|FAILED|TIMEOUT|ERROR')
+      retries: 120
+      delay: 15
       ignore_unreachable: true
       ignore_errors: true
 
-    - name: WinRM dropped during Sysprep - wait for it to come back
+    - name: See whether the box comes back (a successful Sysprep powers it off)
       ansible.builtin.wait_for_connection:
-        timeout: 600
-        sleep: 10
-      when: sysprep_run is unreachable or sysprep_run is failed
+        timeout: 420
+        sleep: 20
+      register: sysprep_reconnect
+      ignore_unreachable: true
+      ignore_errors: true
+      when: sysprep_poll.stdout is not defined or sysprep_poll.stdout is not search('OK:')
 
-    - name: Check whether Sysprep actually completed despite the drop (do not re-run it - not safely repeatable)
-      ansible.windows.win_powershell:
-        script: |
-          (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
-      register: sysprep_state
-      when: sysprep_run is unreachable or sysprep_run is failed
-
-    - name: Fail if Sysprep did not reach the generalized state
-      ansible.builtin.fail:
-        msg: "Sysprep state after reconnect: {{ sysprep_state.output[0] | default('unknown') }} (expected IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE)"
+    - name: Read the Sysprep verdict again now that the box is back
+      ansible.windows.win_shell: |
+        $m = if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') { (Get-Content 'C:\Windows\Temp\sysprep-result.txt' -Raw).Trim() } else { 'no marker' }
+        $s = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+        Write-Output "$m | ImageState=$s"
+      register: sysprep_final
+      changed_when: false
+      until: sysprep_final.stdout is not defined or sysprep_final.stdout is search('OK:|FAILED|TIMEOUT|ERROR|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
+      retries: 120
+      delay: 15
+      ignore_unreachable: true
+      ignore_errors: true
       when:
-        - sysprep_run is unreachable or sysprep_run is failed
-        - sysprep_state.output is not defined or sysprep_state.output[0] != 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE'
+        - sysprep_reconnect.skipped is not defined
+        - sysprep_reconnect is not failed
+        - sysprep_reconnect is reachable
+
+    - name: Work out the Sysprep verdict
+      ansible.builtin.set_fact:
+        sysprep_verdict: "{{ (sysprep_poll.stdout | default('')) ~ ' ' ~ (sysprep_final.stdout | default('')) }}"
+
+    - name: Sysprep outcome
+      ansible.builtin.debug:
+        msg: "{{ sysprep_verdict | trim | default('box powered itself off - the runner reached its shutdown line', true) }}"
+
+    - name: Fail if the Sysprep runner reported a problem
+      ansible.builtin.fail:
+        msg: "Sysprep runner reported: {{ sysprep_verdict | trim }} - see C:\\Windows\\System32\\Sysprep\\Panther\\setuperr.log on the build VM"
+      when: sysprep_verdict is search('FAILED|TIMEOUT|ERROR')
+
+    - name: Fail if the box is still up but Sysprep never generalized it
+      ansible.builtin.fail:
+        msg: "Sysprep did not complete - state after reconnect: {{ sysprep_verdict | trim | default('unreadable', true) }}"
+      when:
+        - sysprep_verdict is not search('OK:|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
+        - sysprep_final.stdout is defined

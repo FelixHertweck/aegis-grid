@@ -39,6 +39,7 @@ build {
       "-f", "1",
       "-c", "winrm",
       "-e", "ansible_password=changeme",
+      "-e", "run_sysprep_in_base=false",
       "-e", "ansible_shell_type=cmd",
       "-e", "ansible_winrm_transport=ntlm",
       "-e", "ansible_winrm_server_cert_validation=ignore",
