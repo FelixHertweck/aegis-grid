@@ -240,6 +240,8 @@
       <DA name="q" bType="Quality" fc="ST" qchg="true" />
       <DA name="t" bType="Timestamp" fc="ST" />
       <DA name="ctlModel" type="CtlModels" bType="Enum" fc="CF" />
+      <!-- Required for sbo-with-normal-security (CSWI1.Pos): a client Selects by reading this. -->
+      <DA name="SBO" bType="VisString64" fc="CO" />
       <DA name="Oper" type="DPCSelectWithValue_1" bType="Struct" fc="CO" />
     </DOType>
     <DOType id="SPC_1_Blk" cdc="SPC">

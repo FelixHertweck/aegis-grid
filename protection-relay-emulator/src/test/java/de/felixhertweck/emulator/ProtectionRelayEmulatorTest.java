@@ -6,6 +6,7 @@ import java.net.ServerSocket;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.beanit.iec61850bean.BdaBitString;
@@ -17,6 +18,7 @@ import com.beanit.iec61850bean.ClientSap;
 import com.beanit.iec61850bean.Fc;
 import com.beanit.iec61850bean.FcModelNode;
 import com.beanit.iec61850bean.ServerModel;
+import com.beanit.iec61850bean.ServiceError;
 import de.felixhertweck.emulator.model.Iec61850References;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -134,21 +136,35 @@ class ProtectionRelayEmulatorTest {
     }
 
     @Test
-    void testXcbr1PosCtlModelIsDirectWithNormalSecurity() {
+    void testCswi1PosCtlModelIsSboWithNormalSecurity() {
+        FcModelNode node =
+                (FcModelNode)
+                        emulator.getServerModel()
+                                .findModelNode(Iec61850References.CSWI_POS_CTL_MODEL, Fc.CF);
+        assertNotNull(node, "CSWI1.Pos ctlModel node should exist");
+        assertEquals(
+                (byte) 2,
+                ((BdaInt8) node).getValue(),
+                "ctlModel must be 2 (sbo-with-normal-security) — the actual control path on the"
+                        + " physical SIPROTEC");
+    }
+
+    @Test
+    void testXcbr1PosCtlModelIsStatusOnly() {
         FcModelNode node =
                 (FcModelNode)
                         emulator.getServerModel()
                                 .findModelNode(Iec61850References.XCBR_POS_CTL_MODEL, Fc.CF);
         assertNotNull(node, "XCBR1.Pos ctlModel node should exist");
         assertEquals(
-                (byte) 1,
+                (byte) 0,
                 ((BdaInt8) node).getValue(),
-                "ctlModel must be 1 (direct-with-normal-security) so MMS clients can issue an"
-                        + " operate");
+                "ctlModel must be 0 (status-only) — matches the physical SIPROTEC, where XCBR1 is"
+                        + " not directly controllable");
     }
 
     @Test
-    void testOperateViaClientWriteOpensBreakerAndUpdatesPos() throws Exception {
+    void testSelectOperateViaCswi1OpensBreakerAndUpdatesXcbr1Pos() throws Exception {
         assertTrue(emulator.isBreakerClosed(), "Breaker should start closed");
 
         ClientSap clientSap = new ClientSap();
@@ -158,15 +174,18 @@ class ProtectionRelayEmulatorTest {
             ServerModel clientModel = association.retrieveModel();
 
             FcModelNode posNode =
-                    (FcModelNode) clientModel.findModelNode("SIP1CB1/XCBR1.Pos", Fc.CO);
-            assertNotNull(posNode, "Pos (CO) node should exist in client model");
+                    (FcModelNode) clientModel.findModelNode("SIP1CB1/CSWI1.Pos", Fc.CO);
+            assertNotNull(posNode, "CSWI1 Pos (CO) node should exist in client model");
 
             BdaBoolean ctlVal =
                     (BdaBoolean)
                             clientModel.findModelNode(
-                                    Iec61850References.XCBR_POS_OPER_CTLVAL, Fc.CO);
-            assertNotNull(ctlVal, "Pos.Oper.ctlVal node should exist");
+                                    Iec61850References.CSWI_POS_OPER_CTLVAL, Fc.CO);
+            assertNotNull(ctlVal, "CSWI1 Pos.Oper.ctlVal node should exist");
             ctlVal.setValue(false);
+
+            boolean selected = association.select(posNode);
+            assertTrue(selected, "Select on CSWI1.Pos should succeed (sbo-with-normal-security)");
 
             association.operate(posNode);
 
@@ -184,6 +203,103 @@ class ProtectionRelayEmulatorTest {
         assertTrue(
                 (((BdaBitString) posNode).getValue()[0] & 0xFF) == 0x40,
                 "XCBR Pos.stVal should reflect OPEN state (0x40)");
+    }
+
+    @Test
+    void testDirectOperateOnXcbr1PosIsRejected() throws Exception {
+        assertTrue(emulator.isBreakerClosed(), "Breaker should start closed");
+
+        ClientSap clientSap = new ClientSap();
+        ClientAssociation association =
+                clientSap.associate(InetAddress.getByName("127.0.0.1"), port, null, null);
+        try {
+            ServerModel clientModel = association.retrieveModel();
+
+            FcModelNode posNode =
+                    (FcModelNode) clientModel.findModelNode("SIP1CB1/XCBR1.Pos", Fc.CO);
+            assertNotNull(posNode, "XCBR1 Pos (CO) node should exist in client model");
+
+            BdaBoolean ctlVal =
+                    (BdaBoolean)
+                            clientModel.findModelNode(
+                                    Iec61850References.XCBR_POS_OPER_CTLVAL, Fc.CO);
+            assertNotNull(ctlVal, "XCBR1 Pos.Oper.ctlVal node should exist");
+            ctlVal.setValue(false);
+
+            // XCBR1.Pos.ctlModel is status-only (0) — a direct operate is rejected by the
+            // library's own control-service state machine before it ever reaches the write
+            // listener, so this should throw rather than succeed.
+            assertThrows(ServiceError.class, () -> association.operate(posNode));
+
+            Thread.sleep(100);
+        } finally {
+            association.close();
+        }
+
+        assertTrue(
+                emulator.isBreakerClosed(),
+                "Breaker must remain closed — the operate on the status-only XCBR1.Pos must not"
+                        + " have taken effect");
+    }
+
+    @Test
+    void testDirectWriteToXcbr1PosOperIsRejected() throws Exception {
+        assertTrue(emulator.isBreakerClosed(), "Breaker should start closed");
+
+        ClientSap clientSap = new ClientSap();
+        ClientAssociation association =
+                clientSap.associate(InetAddress.getByName("127.0.0.1"), port, null, null);
+        try {
+            ServerModel clientModel = association.retrieveModel();
+
+            BdaBoolean ctlVal =
+                    (BdaBoolean)
+                            clientModel.findModelNode(
+                                    Iec61850References.XCBR_POS_OPER_CTLVAL, Fc.CO);
+            assertNotNull(ctlVal, "XCBR1 Pos.Oper.ctlVal node should exist");
+            ctlVal.setValue(false);
+
+            // End-to-end guard: a raw SetDataValues on XCBR1.Pos must never move the breaker.
+            // The library rejects FC=CO writes below "Oper" before the write listener sees them,
+            // so this covers the outer behaviour; BreakerControlListenerTest covers the listener's
+            // own rejection.
+            assertThrows(ServiceError.class, () -> association.setDataValues(ctlVal));
+
+            Thread.sleep(100);
+        } finally {
+            association.close();
+        }
+
+        assertTrue(
+                emulator.isBreakerClosed(),
+                "Breaker must remain closed — a direct write to the status-only XCBR1.Pos must not"
+                        + " have taken effect");
+    }
+
+    @Test
+    void testProtectionFaultTripsBreaker() throws InterruptedException {
+        assertTrue(emulator.isBreakerClosed(), "Breaker should start closed");
+
+        emulator.triggerProtectionFault();
+
+        // Default operateDelaySeconds = 1s; poll up to 3s for the trip to propagate.
+        boolean tripped = false;
+        for (int i = 0; i < 30; i++) {
+            Thread.sleep(100);
+            if (!emulator.isBreakerClosed()) {
+                tripped = true;
+                break;
+            }
+        }
+        assertTrue(tripped, "PTOC operate should trip the breaker open");
+
+        FcModelNode posNode =
+                (FcModelNode)
+                        emulator.getServerModel()
+                                .findModelNode(Iec61850References.XCBR_POS_STVAL, Fc.ST);
+        assertTrue(
+                (((BdaBitString) posNode).getValue()[0] & 0xFF) == 0x40,
+                "XCBR Pos.stVal should reflect OPEN state (0x40) after the trip");
     }
 
     @Test
