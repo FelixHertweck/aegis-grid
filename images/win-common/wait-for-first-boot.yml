@@ -47,26 +47,20 @@
   register: cbi_initial
   changed_when: false
 
-# wait_for_connection can't wait out a reboot that hasn't started - it
-# connects to the still-up box and returns at once. Watching the port close
-# from here is the only wait that holds, and it runs nothing on the box, so
-# the reboot can't cut a command mid-flight.
+# The reboot lands ~45s after WinRM first answers, and wait_for_connection
+# can't wait out a reboot that hasn't started - it connects to the still-up
+# box and returns at once. So sit out the whole window with pause, which
+# runs nothing on the box and so can't be cut mid-command, and only then
+# reconnect.
 - name: Ride out cloudbase-init's reboot
   when: cbi_initial.stdout is not search('DONE')
   block:
-    - name: Wait for WinRM to go down
-      ansible.builtin.wait_for:
-        host: "{{ ansible_host | default(inventory_hostname) }}"
-        port: "{{ ansible_port | default(5985) }}"
-        state: stopped
-        timeout: 300
-      delegate_to: localhost
-      # Timing out means cloudbase-init finished without rebooting.
-      failed_when: false
+    - name: Sit out the reboot window
+      ansible.builtin.pause:
+        seconds: 150
 
     - name: Wait for WinRM to come back
       ansible.builtin.wait_for_connection:
-        delay: 15
         timeout: 1800
         sleep: 15
 
