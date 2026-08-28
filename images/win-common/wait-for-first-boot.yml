@@ -36,22 +36,25 @@
       }
       Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
 
-- name: Check cloudbase-init status cleanly
+- name: Check initial cloudbase-init status
   ansible.windows.win_shell: "{{ cbi_probe }}"
   register: cbi_initial
   changed_when: false
   ignore_unreachable: true
   ignore_errors: true
-  no_log: true
 
-- name: Wait for connection if cloudbase-init is rebooting the host
+- name: Pause to allow cloudbase-init to initiate reboot
+  ansible.builtin.pause:
+    seconds: 25
+  when: cbi_initial.stdout is defined and cbi_initial.stdout is search('RUNNING')
+
+- name: Wait for host to complete cloudbase-init reboot
   ansible.builtin.wait_for_connection:
-    delay: 15
     timeout: 1800
     sleep: 15
-  when: cbi_initial.stdout is not defined or cbi_initial.stdout is search('RUNNING')
+  when: cbi_initial.stdout is defined and cbi_initial.stdout is search('RUNNING')
 
-- name: Wait for cloudbase-init to finish its first-boot run
+- name: Confirm cloudbase-init is finished
   ansible.windows.win_shell: "{{ cbi_probe }}"
   register: cbi
   changed_when: false
@@ -60,20 +63,6 @@
   delay: 10
   ignore_unreachable: true
   ignore_errors: true
-  no_log: true
-
-- name: Ensure WinRM connection is stable after cloudbase-init completion
-  ansible.builtin.wait_for_connection:
-    timeout: 300
-    sleep: 10
-
-- name: Confirm cloudbase-init is really done with its first-boot run
-  ansible.windows.win_shell: "{{ cbi_probe }}"
-  register: cbi
-  changed_when: false
-  until: cbi.stdout is defined and cbi.stdout is search('DONE')
-  retries: 60
-  delay: 10
 
 # Disabled so it can't interrupt anything later in the build; re-enabled
 # right before Sysprep (see sysprep.yml) for the real customer-facing boot.
