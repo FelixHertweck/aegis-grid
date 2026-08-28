@@ -28,8 +28,14 @@ public final class Iec61850References {
     public static final String PTOC_STR_GENERAL = "SIP1VI3p1_5051OC3phase1/ID_PTOC1.Str.general";
     public static final String PTOC_OP_GENERAL = "SIP1VI3p1_5051OC3phase1/ID_PTOC1.Op.general";
 
-    // XCBR — hosted in SIP1CB1
+    // XCBR — hosted in SIP1CB1. Status-only on the physical SIPROTEC (ctlModel=0);
+    // kept here only for status reads and to explicitly reject stray control writes.
     public static final String XCBR_POS_STVAL = "SIP1CB1/XCBR1.Pos.stVal";
     public static final String XCBR_POS_OPER_CTLVAL = "SIP1CB1/XCBR1.Pos.Oper.ctlVal";
     public static final String XCBR_POS_CTL_MODEL = "SIP1CB1/XCBR1.Pos.ctlModel";
+
+    // CSWI — hosted in SIP1CB1. The actual control path on the physical SIPROTEC
+    // (sbo-with-normal-security, matching what the Phase 2a OT proxy exposes downstream).
+    public static final String CSWI_POS_OPER_CTLVAL = "SIP1CB1/CSWI1.Pos.Oper.ctlVal";
+    public static final String CSWI_POS_CTL_MODEL = "SIP1CB1/CSWI1.Pos.ctlModel";
 }

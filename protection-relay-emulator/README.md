@@ -1,6 +1,6 @@
 # IEC 61850 Protection Relay Emulator
 
-A software-emulated IEC 61850 protection relay built with Java and [iec61850bean](https://github.com/beanit/iec61850bean). It exposes a realistic IED data model (PTOC, XCBR, MMXU) over MMS and runs a background simulation that generates dynamic telemetry. Designed as a deterministic, observable target for attack scenario deployments in the CAVE testbed.
+A software-emulated IEC 61850 protection relay built with Java and [iec61850bean](https://github.com/beanit/iec61850bean). It exposes a realistic IED data model (PTOC, XCBR, CSWI, MMXU) over MMS and runs a background simulation that generates dynamic telemetry. Modelled after the physical Siemens SIPROTEC 5 used in Phase 2a — control path, control model and data model match the real device. Designed as a deterministic, observable target for attack scenario deployments in the CAVE testbed.
 
 ## IED Data Model
 
@@ -11,34 +11,61 @@ IED name: `RelayIED` — Logical Device: `PROT` — full reference prefix: `Rela
 | `LLN0`   | `LLN0`   | Logical node zero (LD-level administration) |
 | `LPHD`   | `LPHD1`  | Physical device information |
 | `PTOC`   | `PTOC1`  | Time overcurrent protection function |
-| `XCBR`   | `XCBR1`  | Circuit breaker control |
+| `XCBR`   | `XCBR1`  | Circuit breaker — status only |
+| `CSWI`   | `CSWI1`  | Switch controller — the actual control path |
 | `MMXU`   | `MMXU1`  | Measurements (voltage, current, power, frequency) |
 
 ### Key Data Attributes
 
 | Object Reference | FC | Description |
 |------------------|----|-------------|
-| `RelayIEDPROT/XCBR1.Pos.stVal` | ST | Breaker position (Dbpos: 1=open, 2=closed) |
-| `RelayIEDPROT/XCBR1.Pos.ctlModel` | CF | Control model (1 = direct-with-normal-security) |
+| `RelayIEDPROT/XCBR1.Pos.stVal` | ST | Breaker position (Dbpos: 1=open, 2=closed) — status mirror |
+| `RelayIEDPROT/XCBR1.Pos.ctlModel` | CF | Control model — `0` (status-only): XCBR1 cannot be operated directly |
+| `RelayIEDPROT/CSWI1.Pos.ctlModel` | CF | Control model — `2` (sbo-with-normal-security) |
 | `RelayIEDPROT/MMXU1.Hz.mag.f` | MX | Grid frequency (Hz) |
 | `RelayIEDPROT/MMXU1.TotW.mag.f` | MX | Total active power (W) |
 | `RelayIEDPROT/MMXU1.PPV.phsAB.cVal.mag.f` | MX | Phase AB voltage (V) |
 | `RelayIEDPROT/PTOC1.Str.general` | ST | Overcurrent pickup signal |
-| `RelayIEDPROT/PTOC1.Op.general` | ST | Overcurrent operate signal |
+| `RelayIEDPROT/PTOC1.Op.general` | ST | Overcurrent operate signal — trips the breaker |
 
 ## Circuit Breaker Behaviour
 
-The breaker starts **closed** on every container start. It uses `direct-with-normal-security` control model — no Select step required.
+The breaker starts **closed** on every container start.
 
-**To open:** issue `Control.Operate(ctlVal=false)` on `RelayIEDPROT/XCBR1.Pos`.  
-**To close:** issue `Control.Operate(ctlVal=true)` on `RelayIEDPROT/XCBR1.Pos`.
+`XCBR1.Pos` is **status-only** (`ctlModel=0`) — it mirrors the breaker position but cannot be
+operated directly; a write attempt is rejected (matching the physical SIPROTEC 5, where XCBR1
+is not directly controllable). The actual control path is `CSWI1.Pos`, using
+`sbo-with-normal-security` (`ctlModel=2`) — the same control model the Phase 2a OT proxy exposes
+to downstream clients for the physical device.
 
-The breaker is never opened automatically. PTOC fault indicators (`Str.general`, `Op.general`) are simulated periodically but do not trip the breaker.
+**To open:** `Control.Select` on `RelayIEDPROT/CSWI1.Pos`, then `Control.Operate(ctlVal=false)`.  
+**To close:** `Control.Select` on `RelayIEDPROT/CSWI1.Pos`, then `Control.Operate(ctlVal=true)`.
+
+Select/Operate reservation (including the select timeout) is handled by the `iec61850bean`
+library itself based on `ctlModel` — no custom select-tracking logic is needed.
+
+## Protection Function
+
+PTOC (definite-time overcurrent) is coupled to the actual measured current, not an independent
+timer:
+
+- **Pickup (`Str.general`):** occurs periodically (see below) and, while active, drives the
+  simulated phase currents to ~7x nominal — the overcurrent condition that caused the pickup.
+- **Operate (`Op.general`):** fires after a 1s delay if the pickup is still active, and **trips
+  the breaker** — opening it directly (the protection function has authority over its own
+  breaker; it does not go through the CSWI1 Select/Operate gate, which is for external MMS
+  clients only).
+- The breaker does **not** auto-reclose after a trip — it stays open until a client closes it via
+  `CSWI1.Pos` or `POST /reset` is called.
+- Pickup/operate indicators clear after 4s; the breaker position is unaffected by the clear.
+
+Pickup occurs with ~15% probability every 120s (average: one event every ~13 minutes) — now that
+`Op.general` has a real effect on the breaker, this is deliberately infrequent so a typical agent
+evaluation run isn't confounded by an unrelated auto-trip racing the agent's own actions.
 
 ## Dynamic Simulation
 
-- **Measurements** update every 2 seconds with realistic random values around nominal (50 Hz, ~1000 W, ~400 V). Power and current drop to near zero when the breaker is open.
-- **PTOC fault events** occur randomly (30% chance every 30 s after a 15 s initial delay), toggling `Str.general` and `Op.general` without affecting the breaker state.
+- **Measurements** update every 2 seconds with realistic random values around nominal (50 Hz, ~1000 W, ~400 V). Power and current drop to near zero when the breaker is open, and rise to ~7x nominal while PTOC has picked up.
 
 ## REST API
 
@@ -67,6 +94,7 @@ curl http://localhost:8080/status
 ### `POST /reset`
 
 Resets the emulator to its initial state:
+- Cancels any in-flight protection fault cycle (pending PTOC operate/clear)
 - Closes the circuit breaker (`XCBR1.Pos.stVal` → 2/closed)
 - Clears PTOC indicators (`Str.general`, `Op.general` → false)
 
@@ -100,3 +128,16 @@ docker compose up
 ```bash
 mvn package
 ```
+
+## Breaking Changes
+
+**Control path changed** (previously the emulator accepted direct control on `XCBR1.Pos`, which
+does not match the physical SIPROTEC 5):
+
+- Circuit breaker control **moved from `XCBR1.Pos` (`ctlModel=1`, direct-with-normal-security) to
+  `CSWI1.Pos` (`ctlModel=2`, sbo-with-normal-security, requires Select before Operate)** — matching
+  the real device (`config/phase-2a/proxy-config.yml`, `config/phase-2a/reset.py`). `XCBR1.Pos` is
+  now status-only and rejects operate attempts.
+- PTOC `Op.general` now trips the breaker instead of being purely cosmetic; pickup now elevates
+  the simulated current instead of firing independently of it.
+- The REST `/status` JSON is unchanged.

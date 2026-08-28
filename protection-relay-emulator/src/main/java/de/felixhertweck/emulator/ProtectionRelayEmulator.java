@@ -65,13 +65,18 @@ public class ProtectionRelayEmulator {
         // Start dynamic simulations
         scheduler = Executors.newScheduledThreadPool(2);
         measurements = new MeasurementGenerator(writer, breakerClosed::get);
-        protection = new ProtectionSimulator(writer);
+        // The protection function has direct authority over its own breaker — a trip bypasses
+        // the CSWI1 Select/Operate gate, which only applies to external MMS clients.
+        protection = new ProtectionSimulator(writer, () -> onBreakerCommand(false));
 
         measurements.scheduleOn(scheduler);
         protection.scheduleOn(scheduler);
     }
 
     public void stop() {
+        if (protection != null) {
+            protection.cancelPending();
+        }
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
@@ -140,6 +145,11 @@ public class ProtectionRelayEmulator {
     }
 
     void reset() {
+        if (protection != null) {
+            // Cancel any in-flight fault operate/clear tasks — otherwise a pending trip could
+            // reopen the breaker after this reset already closed it.
+            protection.cancelPending();
+        }
         breakerClosed.set(true);
         writer.writeBreakerState(Iec61850References.XCBR_POS_STVAL, true);
         writer.writeBoolean(Iec61850References.PTOC_STR_GENERAL, Fc.ST, false);
@@ -164,15 +174,30 @@ public class ProtectionRelayEmulator {
         onBreakerCommand(close);
     }
 
+    /**
+     * Directly triggers a simulated protection fault, bypassing the random timer. Package-private
+     * for tests.
+     */
+    void triggerProtectionFault() {
+        protection.simulateFault();
+    }
+
     private void initCtlModel() {
-        FcModelNode node =
-                (FcModelNode)
-                        serverModel.findModelNode(Iec61850References.XCBR_POS_CTL_MODEL, Fc.CF);
+        // XCBR1.Pos is status-only on the physical SIPROTEC — not directly controllable.
+        setCtlModel(Iec61850References.XCBR_POS_CTL_MODEL, (byte) 0, "XCBR1.Pos");
+        // CSWI1.Pos is the actual control path. The physical SIPROTEC uses ctlModel 4, but this
+        // emulator serves 2 — matching the proxy's downstream view, which is what an agent sees
+        // (see Iec61850ControlModelNormalizer for why enhanced security is normalised away).
+        setCtlModel(Iec61850References.CSWI_POS_CTL_MODEL, (byte) 2, "CSWI1.Pos");
+    }
+
+    private void setCtlModel(String reference, byte ctlModel, String label) {
+        FcModelNode node = (FcModelNode) serverModel.findModelNode(reference, Fc.CF);
         if (node instanceof BdaInt8 bda) {
-            bda.setValue((byte) 1); // 1 = direct-with-normal-security
+            bda.setValue(ctlModel);
         } else {
             logger.warn(
-                    "Could not initialize ctlModel for XCBR1.Pos — node not found or wrong type");
+                    "Could not initialize ctlModel for {} — node not found or wrong type", label);
         }
     }
 
