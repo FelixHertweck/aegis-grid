@@ -1,0 +1,38 @@
+---
+# Shared second half of every Windows image build: the settings that don't need
+# to survive a mid-run reboot. Include after the per-image tasks, right before
+# sysprep.yml.
+
+- name: Ensure NTLM is enabled by default
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+    name: LmCompatibilityLevel
+    data: 5
+    type: dword
+    state: present
+
+- name: Set system-wide PowerShell execution policy to Unrestricted
+  ansible.windows.win_shell: |
+    Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+
+- name: Disable UAC permanently for administrators
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    name: EnableLUA
+    value: 0
+    type: dword
+
+- name: Set all network interfaces to Private
+  ansible.windows.win_shell: |
+    $profiles = Get-NetConnectionProfile
+    foreach ($p in $profiles) {
+        if ($p.NetworkCategory -ne 'Private') {
+            Set-NetConnectionProfile -InterfaceIndex $p.InterfaceIndex -NetworkCategory Private
+        }
+    }
+  args:
+    executable: powershell.exe
+
+- name: Wait 30 seconds before sysprep
+  ansible.builtin.pause:
+    seconds: 30
