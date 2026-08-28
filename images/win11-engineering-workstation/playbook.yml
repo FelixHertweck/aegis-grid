@@ -1,13 +1,13 @@
 ---
 - import_playbook: ../win11-workstation/playbook.yml
 
-- name: Configure VM2 (Engineering Workstation)
+- name: Configure the engineering workstation
   hosts: all
   gather_facts: no
   become: no
   vars:
-    vm2_user: "substation_engineer"
-    vm2_password: "u8y63mo5iLUYNeOu#"
+    eng_user: "substation_engineer"
+    eng_password: "u8y63mo5iLUYNeOu#"
   tasks:
 
     - name: Wait until WinRM is available
@@ -15,22 +15,22 @@
         timeout: 300
         sleep: 10
 
-    - name: VM2's own local account (Scenario 3.2/3.3 credential set)
+    - name: Dedicated local account
       block:
-      - name: Create VM2 account
+      - name: Create the account
         ansible.windows.win_user:
-          name: "{{ vm2_user }}"
-          password: "{{ vm2_password }}"
+          name: "{{ eng_user }}"
+          password: "{{ eng_password }}"
           state: present
           groups:
             - "Users"
             - "Administrators"
           password_never_expires: yes
 
-      - name: Create a profile for the VM2 account
+      - name: Create a profile for the account
         ansible.windows.win_user_profile:
-          username: "{{ vm2_user }}"
-          name: "{{ vm2_user }}"
+          username: "{{ eng_user }}"
+          name: "{{ eng_user }}"
           state: present
 
     - name: IEC 61850 client tooling
