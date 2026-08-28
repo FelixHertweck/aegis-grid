@@ -1,0 +1,71 @@
+{
+  firstOctet: 10,
+  wireguardCidr: "10.253.0.0/16",
+  globalInstances: [
+    {
+      name: "vpn",
+      type: "vpn-server",
+      image: "vpn:latest",
+      flavor: "server-small",
+      hostname: "vpn",
+      fqdn: "vpn.cave.lab",
+    },
+    {
+      type: "dns-server",
+      image: "dns:latest",
+      name: "dns",
+      flavor: "server-small",
+      lastOctet: 254,
+      hostname: "dns.cave.lab",
+      fqdn: "dns.cave.lab",
+    },
+  ],
+  labs: [
+    {
+      name: "phase-1",
+      times: 1,
+      virtualNetworks: [
+        {
+          internalDns: false,
+          id: 1,
+        },
+      ],
+      dnsConfig: [],
+      instances: [
+        {
+          type: "linux",
+          image: "ot-proxy:latest",
+          post: "ot-proxy",
+          networks: [ 1 ],
+          lastOctet: 15,
+          macAddress: null,
+          name: "ot-proxy",
+          flavor: "server-small",
+          hostname: "ot-proxy",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-1a/proxy-config.yml", destination: "/home/ubuntu/proxy-config.yml" },
+            { source: "/cave/backend/configs/phase-1a/ot-proxy.env", destination: "/home/ubuntu/.env" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        {
+          type: "linux",
+          image: "openhands:latest",
+          post: "openhands",
+          networks: [ 1 ],
+          lastOctet: 20,
+          name: "openhands",
+          // For larger instances, if want more conversations at a time use bigger flavor
+          // flavor: "server-xlarge",
+          flavor: "server-large",
+          hostname: "openhands",
+          configFiles: [
+            { source: "/cave/backend/configs/shared/openhands/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-only-neo4j.json", destination: "/home/ubuntu/mcp-servers.json" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+      ],
+    },
+  ],
+}

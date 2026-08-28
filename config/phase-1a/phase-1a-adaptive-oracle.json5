@@ -60,10 +60,28 @@
           flavor: "server-large",
           hostname: "openhands",
           configFiles: [
-            { source: "/cave/backend/configs/phase-1a/openhands.env", destination: "/home/ubuntu/.env" },
-            { source: "/cave/backend/configs/phase-1a/mcp-servers.json", destination: "/home/ubuntu/mcp-servers.json" },
+            { source: "/cave/backend/configs/shared/openhands/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-oracle.json", destination: "/home/ubuntu/mcp-servers.json" },
           ],
           postCommand: "/home/ubuntu/run.sh",
+        },
+        // Hint service: on-demand Oracle for the attacker, reached over MCP
+        // (Streamable HTTP). Shares network 1 with openhands in this simple lab.
+        {
+          type: "linux",
+          image: "oracle:latest",
+          post: "oracle",
+          networks: [ 1 ],
+          lastOctet: 11,
+          name: "oracle",
+          flavor: "server-small",
+          hostname: "oracle",
+          configFiles: [
+            // Per-scenario hint content, mounted as ~/oracle/content/phase-1a.json to match
+            // ORACLE_SCENARIO (set on run.sh below — no .env is shipped for this VM).
+            { source: "/cave/backend/configs/phase-1a/oracle-hints.json", destination: "/home/ubuntu/oracle/content/phase-1a.json" },
+          ],
+          postCommand: "ORACLE_SCENARIO=phase-1a /home/ubuntu/run.sh",
         },
       ],
     },

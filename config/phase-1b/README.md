@@ -49,11 +49,11 @@ The upstream Modbus TCP device must be reachable from the OT network segment at 
 
 ## 1. Place the Deployment Config
 
-Clone the ocelot repository into `/tmp` and copy the entire `phase-1b` folder into the `configs/` directory of your `cave-infrastructure-docker` checkout:
+Clone the ocelot repository into `/tmp`, then copy the `config/` tree into the `configs/` directory of your `cave-infrastructure-docker` checkout:
 
 ```bash
 git clone https://github.com/FelixHertweck/ocelot.git /tmp/ocelot
-cp -r /tmp/ocelot/config/phase-1b ./configs/phase-1b
+cp -r /tmp/ocelot/config/* ./configs/
 ```
 
 ## 2. Configure the Proxy
@@ -103,16 +103,16 @@ nano configs/phase-1b/ot-gateway.env
 | `OT_DEVICE_IP` | IP of the field device on the OT network — leave empty to omit from the registry |
 | `OT_DEVICE_PORT` | Modbus TCP port of the field device (default: `502`) |
 
-These values are used by `run.sh` on VM startup to configure iptables forwarding between the two networks. They must match the CAVE virtual network CIDRs defined in `phase-1b.json5`.
+These values are used by `run.sh` on VM startup to configure iptables forwarding between the two networks. They must match the CAVE virtual network CIDRs defined in the phase config (`phase-1b-cumulative.json5` / `phase-1b-adaptive-oracle.json5`).
 
 `OT_DEVICE_MODEL`, `OT_DEVICE_IP`, and `OT_DEVICE_PORT` are passed into the gateway container and populate the OT device registry at `/api/v1/ot/assets` on container startup. The endpoint is intentionally not listed in the dashboard's API reference — it is discoverable via the `x-ot-inventory` meta tag in the dashboard HTML source and via the `inventory` field on the OT interface in `/api/v1/network/interfaces`.
 
 ## 4. Configure the Task
 
-Edit `configs/phase-1b/openhands.env` and fill in LLM credentials and the task prompt:
+Edit `configs/shared/openhands/openhands.env` and fill in LLM credentials and the task prompt:
 
 ```bash
-nano configs/phase-1b/openhands.env
+nano configs/shared/openhands/openhands.env
 ```
 
 | Variable | Description |
@@ -125,7 +125,7 @@ nano configs/phase-1b/openhands.env
 | `NEO4J_PASSWORD` | Password for the Neo4j instance (min. 8 characters) |
 | `NEO4J_MCP_ENABLED` | Set to `false` to disable the Neo4j MCP server (default: `true`) |
 
-`mcp-servers.json` is deployed alongside `openhands.env` and configures two Neo4j MCP servers (`neo4j` for Cypher queries, `neo4j-memory` for persistent agent memory). No manual edits are needed unless you change `NEO4J_PASSWORD`.
+The `mcp-servers-*.json` deployed alongside `openhands.env` configures two Neo4j MCP servers (`neo4j` for Cypher queries, `neo4j-memory` for persistent agent memory); the `-adaptive-oracle` config additionally registers the `oracle` hint service. No manual edits are needed unless you change `NEO4J_PASSWORD`.
 
 ## 5. Deploy Infrastructure
 
@@ -135,14 +135,18 @@ Run the interactive wrapper from your `cave-infrastructure-docker` directory:
 docker compose run --rm cave /cave/deploy-wrapper.sh
 ```
 
-To deploy non-interactively with a custom lab prefix:
+To deploy non-interactively with a custom lab prefix. Pick the config for the hinting mode you
+want: `-cumulative` (pre-staged prompt hints only) or `-adaptive-oracle` (adds the Oracle hint
+service VM on `10.1.1.11`, reached over MCP) — see [Criteria 5a/5b](../../docs/evaluation/Criteria.md):
 
 ```bash
-# OpenVPN
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-1b/phase-1b --lab-prefix ocelot-p1b
+# cumulative-hinting
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-1b/phase-1b-cumulative --lab-prefix ocelot-p1b
 
-# WireGuard
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-1b/phase-1b --wg --lab-prefix ocelot-p1b
+# ...or adaptive-hinting
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-1b/phase-1b-adaptive-oracle --lab-prefix ocelot-p1b
+
+# append --wg for WireGuard instead of OpenVPN
 ```
 
 ## 6. Connect and Access
@@ -164,7 +168,7 @@ sudo openvpn --config out/<your-prefix>/openvpn/admins/admin1.ovpn
 
 ## 7. Assign a MAC Address to the OT-Proxy VM
 
-By default the `ot-proxy` VM is deployed without a fixed MAC address (`macAddress: null` in `phase-1b.json5`). If the physical OT network requires a known MAC for DHCP reservations or switch-port ACLs, edit the config:
+By default the `ot-proxy` VM is deployed without a fixed MAC address (`macAddress: null` in the phase config). If the physical OT network requires a known MAC for DHCP reservations or switch-port ACLs, edit whichever config you deploy (`phase-1b-cumulative.json5` and/or `-adaptive-oracle.json5`):
 
 ```json5
 {

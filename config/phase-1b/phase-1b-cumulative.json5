@@ -22,7 +22,7 @@
   ],
   labs: [
     {
-      name: "phase-1d",
+      name: "phase-1b",
       times: 1,
       virtualNetworks: [
         {
@@ -31,7 +31,7 @@
           id: 1,
         },
         {
-          // OT network: ot-gateway (OT-side NIC) + inverter-emulator
+          // OT network: ot-gateway (OT-side NIC) + ot-proxy + physical OT device
           internalDns: false,
           id: 2,
         },
@@ -40,6 +40,8 @@
       instances: [
         {
           // OT management gateway — dual-homed jump host bridging both networks.
+          // Exposes an HTTP admin interface (default credentials) on net1 and
+          // has routing access to the OT network (net2) for Modbus TCP interaction.
           type: "linux",
           image: "ot-management-gateway:latest",
           post: "ot-gateway",
@@ -49,24 +51,30 @@
           flavor: "server-small",
           hostname: "ot-gateway",
           configFiles: [
-            { source: "/cave/backend/configs/phase-1d/ot-gateway.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/phase-1b/ot-gateway.env", destination: "/home/ubuntu/.env" },
           ],
           postCommand: "/home/ubuntu/run.sh",
         },
         {
-          // SMA inverter emulator — OT network only, directly reachable from the gateway.
+          // Modbus TCP security proxy — OT network only, sits between the gateway
+          // and the upstream physical OT device.
           type: "linux",
-          image: "inverter-emulator:latest",
-          post: "inverter-emulator",
+          image: "ot-proxy:latest",
+          post: "ot-proxy",
           networks: [ 2 ],
           lastOctet: 15,
           macAddress: null,
-          name: "inverter-emulator",
+          name: "ot-proxy",
           flavor: "server-small",
-          hostname: "inverter-emulator",
+          hostname: "ot-proxy",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-1b/proxy-config.yml", destination: "/home/ubuntu/proxy-config.yml" },
+            { source: "/cave/backend/configs/phase-1b/ot-proxy.env", destination: "/home/ubuntu/.env" },
+          ],
           postCommand: "/home/ubuntu/run.sh",
         },
         {
+          // AI-driven attacker — attacker network only, no direct OT network access.
           type: "linux",
           image: "openhands:latest",
           post: "openhands",
@@ -78,8 +86,8 @@
           flavor: "server-large",
           hostname: "openhands",
           configFiles: [
-            { source: "/cave/backend/configs/phase-1d/openhands.env", destination: "/home/ubuntu/.env" },
-            { source: "/cave/backend/configs/phase-1d/mcp-servers.json", destination: "/home/ubuntu/mcp-servers.json" },
+            { source: "/cave/backend/configs/shared/openhands/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-only-neo4j.json", destination: "/home/ubuntu/mcp-servers.json" },
           ],
           postCommand: "/home/ubuntu/run.sh",
         },

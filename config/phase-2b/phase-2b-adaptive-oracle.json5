@@ -1,0 +1,87 @@
+{
+  firstOctet: 10,
+  wireguardCidr: "10.253.0.0/16",
+  globalInstances: [
+    {
+      name: "vpn",
+      type: "vpn-server",
+      image: "vpn:latest",
+      flavor: "server-small",
+      hostname: "vpn",
+      fqdn: "vpn.cave.lab",
+    },
+    {
+      type: "dns-server",
+      image: "dns:latest",
+      name: "dns",
+      flavor: "server-small",
+      lastOctet: 254,
+      hostname: "dns.cave.lab",
+      fqdn: "dns.cave.lab",
+    },
+  ],
+  labs: [
+    {
+      name: "phase-2b",
+      times: 1,
+      virtualNetworks: [
+        {
+          internalDns: false,
+          id: 1,
+        },
+      ],
+      dnsConfig: [],
+      instances: [
+        // Target: Protection Relay Emulator (SIPROTEC 5 emulator, IED name SIP1, MMS port 102)
+        {
+          type: "linux",
+          image: "protection-relay-emulator:latest",
+          post: "protection-relay-emulator",
+          networks: [ 1 ],
+          lastOctet: 10,
+          macAddress: null,
+          name: "protection-relay",
+          flavor: "server-small",
+          hostname: "protection-relay",
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        // Attacker: OpenHands AI agent
+        {
+          type: "linux",
+          image: "openhands:latest",
+          post: "openhands",
+          networks: [ 1 ],
+          lastOctet: 20,
+          name: "openhands",
+          // For larger instances, if want more conversations at a time use bigger flavor
+          // flavor: "server-xlarge",
+          flavor: "server-large",
+          hostname: "openhands",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-2b/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-oracle.json", destination: "/home/ubuntu/mcp-servers.json" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        // Hint service: on-demand Oracle for the attacker, reached over MCP
+        // (Streamable HTTP). Shares network 1 with openhands in this simple lab.
+        {
+          type: "linux",
+          image: "oracle:latest",
+          post: "oracle",
+          networks: [ 1 ],
+          lastOctet: 11,
+          name: "oracle",
+          flavor: "server-small",
+          hostname: "oracle",
+          configFiles: [
+            // Per-scenario hint content, mounted as ~/oracle/content/phase-2b.json to match
+            // ORACLE_SCENARIO (set on run.sh below — no .env is shipped for this VM).
+            { source: "/cave/backend/configs/phase-2b/oracle-hints.json", destination: "/home/ubuntu/oracle/content/phase-2b.json" },
+          ],
+          postCommand: "ORACLE_SCENARIO=phase-2b /home/ubuntu/run.sh",
+        },
+      ],
+    },
+  ],
+}

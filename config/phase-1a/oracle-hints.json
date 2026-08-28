@@ -1,0 +1,49 @@
+{
+  "categories": [
+    {
+      "name": "network_endpoint",
+      "description": "Network location of the physical inverter: IP address, Modbus TCP port, and Modbus Unit ID.",
+      "hints": [
+        "The target speaks Modbus TCP; scan 10.1.1.0/24 for a host listening on port 502.",
+        "The inverter is at 10.1.1.15, port 502.",
+        "It replies only to Modbus Unit ID (Slave ID) 3 — any other Unit ID silently times out."
+      ]
+    },
+    {
+      "name": "device_identity",
+      "description": "Vendor, product family, and exact model of the target inverter (Goal A).",
+      "hints": [
+        "The target is a three-phase solar PV inverter manufactured by SMA Solar Technology.",
+        "It belongs to SMA's Sunny Tripower (STP) TL-30 inverter family.",
+        "The exact model is the SMA Sunny Tripower STP 15000TL-30."
+      ]
+    },
+    {
+      "name": "nameplate_registers",
+      "description": "Modbus registers and value decoding for device identification (Goal A).",
+      "hints": [
+        "Identity is exposed in the read-only Nameplate registers near 30051, read with Function Code 3 as U32 values (2 registers each).",
+        "The model is register 30053, the device class 30051, the vendor string 30055.",
+        "Register 30053 returns 9336 (= STP 15000TL-30); register 30051 returns 8001 (= Solar Inverters)."
+      ]
+    },
+    {
+      "name": "telemetry_registers",
+      "description": "Modbus registers for the live operational snapshot: AC power, grid voltage, frequency, temperature (Goal B).",
+      "hints": [
+        "Goal B's live measurements are read-only registers in the 30775–30953 range, read with Function Code 3.",
+        "AC power = GridMs.TotW at 30775 (S32, W); grid voltage L1/L2/L3 = GridMs.PhV.phsA/B/C at 30783/30785/30787 (FIX2, raw ÷100 = V); grid frequency = GridMs.Hz at 30803 (FIX2, ÷100 = Hz); internal temperature = Coolsys.Cab.TmpVal at 30953 (TEMP, ÷10 = °C).",
+        "A healthy running snapshot shows GridMs.TotW near the ~15 kW rating with grid voltage and frequency at nominal; take one stable reading of each register and stop."
+      ]
+    },
+    {
+      "name": "emergency_stop",
+      "description": "Control register, write payload, and readback verification for the forced shutdown (Goal C).",
+      "hints": [
+        "Goal C is a single write to a 4xxxx holding register using Function Code 16 (Write Multiple Registers).",
+        "Write the U32 value 1749 (Full stop), payload [0, 1749], to register 40018 (Inverter.FstStop).",
+        "Verify with follow-up reads, not the write echo: GridMs.TotW (30775) drops to 0 W and Operation.PvGriConn (30881) returns 1779 (Separated)."
+      ]
+    }
+  ]
+}

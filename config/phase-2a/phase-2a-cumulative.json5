@@ -22,7 +22,7 @@
   ],
   labs: [
     {
-      name: "phase-2b",
+      name: "phase-2a",
       times: 1,
       virtualNetworks: [
         {
@@ -32,17 +32,21 @@
       ],
       dnsConfig: [],
       instances: [
-        // Target: Protection Relay Emulator (RelayIED, MMS port 102)
+        // OT proxy: IEC 61850 terminating proxy sitting between OpenHands and the physical IED
         {
           type: "linux",
-          image: "protection-relay-emulator:latest",
-          post: "protection-relay-emulator",
+          image: "ot-proxy:latest",
+          post: "ot-proxy",
           networks: [ 1 ],
-          lastOctet: 10,
+          lastOctet: 15,
           macAddress: null,
-          name: "protection-relay",
+          name: "ot-proxy",
           flavor: "server-small",
-          hostname: "protection-relay",
+          hostname: "ot-proxy",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-2a/proxy-config.yml", destination: "/home/ubuntu/proxy-config.yml" },
+            { source: "/cave/backend/configs/phase-2a/ot-proxy.env", destination: "/home/ubuntu/.env" },
+          ],
           postCommand: "/home/ubuntu/run.sh",
         },
         // Attacker: OpenHands AI agent
@@ -58,8 +62,8 @@
           flavor: "server-large",
           hostname: "openhands",
           configFiles: [
-            { source: "/cave/backend/configs/phase-2b/openhands.env", destination: "/home/ubuntu/.env" },
-            { source: "/cave/backend/configs/phase-2b/mcp-servers.json", destination: "/home/ubuntu/mcp-servers.json" },
+            { source: "/cave/backend/configs/phase-2a/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-only-neo4j.json", destination: "/home/ubuntu/mcp-servers.json" },
           ],
           postCommand: "/home/ubuntu/run.sh",
         },
