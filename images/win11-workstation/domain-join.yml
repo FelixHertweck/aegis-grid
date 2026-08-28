@@ -1,0 +1,99 @@
+---
+# Deploy-time only — NOT a Packer provisioner. A domain join needs the live DC, which the
+# isolated Packer build network doesn't have; the golden image stays domain-agnostic. Run
+# once per host after it boots:
+#
+#   ansible-playbook -i '<HOST_IP>,' domain-join.yml \
+#     -e ansible_user=caveadmin -e ansible_password='<the unattend.xml AdministratorPassword>' \
+#     -c winrm -e ansible_winrm_transport=ntlm -e ansible_winrm_server_cert_validation=ignore \
+#     -e ansible_port=5985 -e ansible_winrm_scheme=http \
+#     -e target_hostname=<name> [-e patient_zero=true]
+#
+#   target_hostname=vm1d  its FQDN must match the HTTP SPN VulnAD.ps1 seeds on svc_helpdesk
+#   patient_zero=true      also apply ad-foothold.yml (CORP\user1 autologon, no local admin)
+#
+# dc_ip / target DNS default to 10.1.1.40; override with -e dc_ip=... .
+# Same build-vs-deploy split as the DC's domain-promotion.yml.
+
+- name: Join corp.local and stand down the shared local admin
+  hosts: all
+  gather_facts: no
+  vars:
+    domain_name: "corp.local"
+    dc_ip: "10.1.1.40"
+    # Domain Admin created by VulnAD.ps1 (New-DomainAdmin) — keep in sync. Domain Admins is
+    # local admin on every member, so it takes over once caveadmin is disabled below.
+    domain_admin_user: "CORP\\ad_admin"
+    domain_admin_password: "Hd4mNq2VbXtRfW9j!"
+
+  tasks:
+    - name: Wait until WinRM is available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Point DNS at the domain controller (Kerberos SRV resolution)
+      ansible.windows.win_dns_client:
+        adapter_names: "*"
+        dns_servers:
+          - "{{ dc_ip }}"
+
+    - name: Join the domain and set the computer name
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "{{ target_hostname }}"
+        domain_admin_user: "{{ domain_admin_user }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+        reboot: true
+
+    - name: Wait until WinRM is available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 10
+
+    - name: Wait until the domain is reachable
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            Get-ADDomain -Server "{{ domain_name }}" -ErrorAction Stop | Out-Null
+            Write-Output "READY"
+          } catch {
+            Write-Output "FAILED"
+          }
+      register: domain_check
+      retries: 20
+      delay: 30
+      until: "'READY' in domain_check.output"
+
+    - name: Apply ad-foothold.yml
+      ansible.builtin.include_tasks: ad-foothold.yml
+      when: patient_zero | default(false) | bool
+
+    - name: Disable local caveadmin (the domain takes over via ad_admin)
+      block:
+        - name: Write the disable-caveadmin script
+          ansible.windows.win_copy:
+            dest: C:\Windows\Temp\disable.ps1
+            content: |
+              net.exe user caveadmin /active:no
+
+              Remove-Item "C:\Windows\Temp\disable.ps1" -Force
+
+        - name: Get system time +5 minutes on Windows
+          ansible.windows.win_shell: |
+            (Get-Date).AddMinutes(5).ToString('yyyy-MM-ddTHH:mm:ss')
+          register: time_plus_5
+
+        - name: Schedule one-time task to disable caveadmin in 5 minutes
+          community.windows.win_scheduled_task:
+            name: disableTask
+            description: "Disable caveadmin"
+            actions:
+              - path: powershell.exe
+                arguments: -NoProfile -ExecutionPolicy Bypass -File "C:\Windows\Temp\disable.ps1"
+            triggers:
+              - type: time
+                start_boundary: "{{ time_plus_5.stdout | trim }}"
+            username: SYSTEM
+            run_level: highest
+            state: present

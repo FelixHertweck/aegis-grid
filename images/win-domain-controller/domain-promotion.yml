@@ -12,7 +12,7 @@
 # Mirrors the split already used for day4/DC01 and day5/01-dc in cave-images: golden image
 # stays generic/generalizable, promotion + AD content is a separate live-host run.
 
-- name: Promote to Domain Controller and seed Scenario 3.3 AD content
+- name: Promote to Domain Controller and seed AD content
   hosts: all
   gather_facts: no
   vars:
@@ -60,7 +60,14 @@
       delay: 30
       until: "'READY' in addomain_check.output"
 
-    - name: Copy AD content script (Path B account + ad_admin, DCSync stays disabled) to remote host
+    # VulnAD.ps1 uses the GroupPolicy module (ships with GPMC, normally auto-installed
+    # alongside AD DS - make that explicit).
+    - name: Ensure Group Policy Management is present
+      ansible.windows.win_feature:
+        name: GPMC
+        state: present
+
+    - name: Copy AD content script to remote host
       ansible.windows.win_copy:
         src: ./VulnAD.ps1
         dest: C:\Windows\Temp\VulnAD.ps1
