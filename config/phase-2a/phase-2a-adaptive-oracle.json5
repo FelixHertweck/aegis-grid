@@ -1,0 +1,91 @@
+{
+  firstOctet: 10,
+  wireguardCidr: "10.253.0.0/16",
+  globalInstances: [
+    {
+      name: "vpn",
+      type: "vpn-server",
+      image: "vpn:latest",
+      flavor: "server-small",
+      hostname: "vpn",
+      fqdn: "vpn.cave.lab",
+    },
+    {
+      type: "dns-server",
+      image: "dns:latest",
+      name: "dns",
+      flavor: "server-small",
+      lastOctet: 254,
+      hostname: "dns.cave.lab",
+      fqdn: "dns.cave.lab",
+    },
+  ],
+  labs: [
+    {
+      name: "phase-2a",
+      times: 1,
+      virtualNetworks: [
+        {
+          internalDns: false,
+          id: 1,
+        },
+      ],
+      dnsConfig: [],
+      instances: [
+        // OT proxy: IEC 61850 terminating proxy sitting between OpenHands and the physical IED
+        {
+          type: "linux",
+          image: "ot-proxy:latest",
+          post: "ot-proxy",
+          networks: [ 1 ],
+          lastOctet: 15,
+          macAddress: null,
+          name: "ot-proxy",
+          flavor: "server-small",
+          hostname: "ot-proxy",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-2a/proxy-config.yml", destination: "/home/ubuntu/proxy-config.yml" },
+            { source: "/cave/backend/configs/phase-2a/ot-proxy.env", destination: "/home/ubuntu/.env" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        // Attacker: OpenHands AI agent
+        {
+          type: "linux",
+          image: "openhands:latest",
+          post: "openhands",
+          networks: [ 1 ],
+          lastOctet: 20,
+          name: "openhands",
+          // For larger instances, if want more conversations at a time use bigger flavor
+          // flavor: "server-xlarge",
+          flavor: "server-large",
+          hostname: "openhands",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-2a/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-oracle.json", destination: "/home/ubuntu/mcp-servers.json" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        // Hint service: on-demand Oracle for the attacker, reached over MCP
+        // (Streamable HTTP). Shares network 1 with openhands in this simple lab.
+        {
+          type: "linux",
+          image: "oracle:latest",
+          post: "oracle",
+          networks: [ 1 ],
+          lastOctet: 11,
+          name: "oracle",
+          flavor: "server-small",
+          hostname: "oracle",
+          configFiles: [
+            // Per-scenario hint content, mounted as ~/oracle/content/phase-2a.json to match
+            // ORACLE_SCENARIO (set on run.sh below — no .env is shipped for this VM).
+            { source: "/cave/backend/configs/phase-2a/oracle-hints.json", destination: "/home/ubuntu/oracle/content/phase-2a.json" },
+          ],
+          postCommand: "ORACLE_SCENARIO=phase-2a /home/ubuntu/run.sh",
+        },
+      ],
+    },
+  ],
+}

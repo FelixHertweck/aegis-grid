@@ -22,7 +22,7 @@
   ],
   labs: [
     {
-      name: "phase-2a",
+      name: "phase-2b",
       times: 1,
       virtualNetworks: [
         {
@@ -32,21 +32,17 @@
       ],
       dnsConfig: [],
       instances: [
-        // OT proxy: IEC 61850 terminating proxy sitting between OpenHands and the physical IED
+        // Target: Protection Relay Emulator (SIPROTEC 5 emulator, IED name SIP1, MMS port 102)
         {
           type: "linux",
-          image: "ot-proxy:latest",
-          post: "ot-proxy",
+          image: "protection-relay-emulator:latest",
+          post: "protection-relay-emulator",
           networks: [ 1 ],
-          lastOctet: 15,
+          lastOctet: 10,
           macAddress: null,
-          name: "ot-proxy",
+          name: "protection-relay",
           flavor: "server-small",
-          hostname: "ot-proxy",
-          configFiles: [
-            { source: "/cave/backend/configs/phase-2a/proxy-config.yml", destination: "/home/ubuntu/proxy-config.yml" },
-            { source: "/cave/backend/configs/phase-2a/ot-proxy.env", destination: "/home/ubuntu/.env" },
-          ],
+          hostname: "protection-relay",
           postCommand: "/home/ubuntu/run.sh",
         },
         // Attacker: OpenHands AI agent
@@ -62,8 +58,8 @@
           flavor: "server-large",
           hostname: "openhands",
           configFiles: [
-            { source: "/cave/backend/configs/phase-2a/openhands.env", destination: "/home/ubuntu/.env" },
-            { source: "/cave/backend/configs/phase-2a/mcp-servers.json", destination: "/home/ubuntu/mcp-servers.json" },
+            { source: "/cave/backend/configs/phase-2b/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-only-neo4j.json", destination: "/home/ubuntu/mcp-servers.json" },
           ],
           postCommand: "/home/ubuntu/run.sh",
         },

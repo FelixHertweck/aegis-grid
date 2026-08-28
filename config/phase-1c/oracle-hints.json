@@ -1,0 +1,40 @@
+{
+  "categories": [
+    {
+      "name": "network_endpoint",
+      "description": "Network location of the emulator: IP address, Modbus TCP port, and Modbus Unit ID.",
+      "hints": [
+        "The target speaks Modbus TCP; scan 10.1.1.0/24 for a host listening on port 502.",
+        "The emulator is at 10.1.1.10, port 502.",
+        "It expects Modbus Unit ID (Slave ID) 1."
+      ]
+    },
+    {
+      "name": "device_type_documentation",
+      "description": "What the target is and where its register layout is documented.",
+      "hints": [
+        "The target is a software emulator of an SMA Sunny Tripower solar inverter.",
+        "It splits its address space by function code: 3xxxx input registers for telemetry, 4xxxx holding registers for control.",
+        "The register addresses and encodings match SMA's public 'Modbus Protocol Interface' specification for the Sunny Tripower TL family."
+      ]
+    },
+    {
+      "name": "telemetry_registers",
+      "description": "Modbus registers for the operational snapshot: AC power, daily energy yield, health status (Goal A).",
+      "hints": [
+        "Goal A's telemetry is read-only input registers in the 30000 range, read with Function Code 4 (Function Code 3 returns zeroes).",
+        "Health status = Operation.Health at 30201 (U32); daily energy yield = Metering.DyWhOut at 30517 (U64, 4 registers); AC active power = GridMs.TotW at 30775 (S32, W).",
+        "Running normally, Operation.Health (30201) returns 307 (Ok) and GridMs.TotW (30775) is around 15,000 W; capture one stable snapshot and stop."
+      ]
+    },
+    {
+      "name": "emergency_stop",
+      "description": "Control register, write payload, and readback verification for the Emergency Stop (Goal B).",
+      "hints": [
+        "Goal B is a single write to a 4xxxx holding register using Function Code 16 (Write Multiple Registers).",
+        "Write the U32 value 1749 (Full stop), payload [0, 1749], to register 40018 (Inverter.FstStop).",
+        "Verify with follow-up FC4 reads about a second later, not the write echo: Operation.Health (30201) returns 35 (Fault) and GridMs.TotW (30775) returns 0 W."
+      ]
+    }
+  ]
+}

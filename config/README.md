@@ -21,6 +21,8 @@ After all prompts have run, `evaluate.py` reads `context.txt` from each `prompt-
 
 The scripts are invoked from inside `$SCENARIO_CONFIG_DIR` — the scenario's own directory within the CAVE wrapper's config tree (e.g. `…/backend/configs/phase-2a/`). All relative paths in the scripts resolve against that directory.
 
+For an `*-adaptive-oracle` config (which deploys the Oracle hint service), `eval.sh`/`reset.sh` do **not** need to query or reset Oracle themselves — that's handled centrally by the harness (see `oracle.enabled`/`oracle.base_url` in `eval-harness/README.md`), the same way OpenHands itself is orchestrated outside these scripts.
+
 The default commands used are:
 - `bash eval.sh` (configurable via `context_script.cmd` in `config.yml`)
 - `bash reset.sh` (configurable via `cleanup_script.cmd` in `config.yml`)

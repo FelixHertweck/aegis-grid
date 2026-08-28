@@ -17,11 +17,11 @@ The upstream Modbus TCP device (e.g. an Aloha Water Treatment simulator or physi
 
 ## 1. Place the Deployment Config
 
-Clone the ocelot repository into `/tmp` and copy the entire `phase-1a` folder into the `configs/` directory of your `cave-infrastructure-docker` checkout:
+Clone the ocelot repository into `/tmp`, then copy the `config/` tree into the `configs/` directory of your `cave-infrastructure-docker` checkout:
 
 ```bash
 git clone https://github.com/FelixHertweck/ocelot.git /tmp/ocelot
-cp -r /tmp/ocelot/config/phase-1a ./configs/phase-1a
+cp -r /tmp/ocelot/config/* ./configs/
 ```
 
 ## 2. Configure the Proxy
@@ -52,10 +52,10 @@ nano configs/phase-1a/ot-proxy.env
 
 ## 3. Configure the Task
 
-Edit `configs/phase-1a/openhands.env` and fill in your LLM credentials and the task prompt:
+Edit `configs/shared/openhands/openhands.env` and fill in your LLM credentials and the task prompt:
 
 ```bash
-nano configs/phase-1a/openhands.env
+nano configs/shared/openhands/openhands.env
 ```
 
 | Variable | Description |
@@ -72,14 +72,18 @@ Run the interactive wrapper from your `cave-infrastructure-docker` directory:
 docker compose run --rm cave /cave/deploy-wrapper.sh
 ```
 
-To deploy non-interactively with a custom lab prefix:
+To deploy non-interactively with a custom lab prefix. Pick the config for the hinting mode you
+want: `-cumulative` (pre-staged prompt hints only) or `-adaptive-oracle` (adds the Oracle hint
+service VM on `10.1.1.11`, reached over MCP) — see [Criteria 5a/5b](../../docs/evaluation/Criteria.md):
 
 ```bash
-# OpenVPN
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-1a/phase-1a --lab-prefix ocelot-p1a
+# cumulative-hinting
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-1a/phase-1a-cumulative --lab-prefix ocelot-p1a
 
-# WireGuard
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-1a/phase-1a --wg --lab-prefix ocelot-p1a
+# ...or adaptive-hinting
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-1a/phase-1a-adaptive-oracle --lab-prefix ocelot-p1a
+
+# append --wg for WireGuard instead of OpenVPN
 ```
 
 Both VMs are fully configured automatically during deployment via `postCommand`:
@@ -134,9 +138,9 @@ If the upstream Modbus device uses a slave ID other than `3`, pass `--slave <id>
 
 ## 7. Assign a MAC Address to the OT-Proxy VM
 
-By default the `ot-proxy` VM is deployed without a fixed MAC address (`macAddress: null` in `phase-1a.json5`). Some physical OT networks require a known MAC address — e.g. for DHCP reservations or switch-port ACLs.
+By default the `ot-proxy` VM is deployed without a fixed MAC address (`macAddress: null` in the phase config). Some physical OT networks require a known MAC address — e.g. for DHCP reservations or switch-port ACLs.
 
-To assign a fixed MAC address, edit `configs/phase-1a/phase-1a.json5` and replace `null` with the desired address:
+To assign a fixed MAC address, edit whichever config you deploy (`configs/phase-1a/phase-1a-cumulative.json5` and/or `-adaptive-oracle.json5`) and replace `null` with the desired address:
 
 ```json5
 {

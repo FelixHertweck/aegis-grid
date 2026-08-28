@@ -22,22 +22,44 @@
   ],
   labs: [
     {
-      name: "phase-1c",
+      name: "phase-1d",
       times: 1,
       virtualNetworks: [
         {
+          // Attacker network: openhands + ot-gateway HTTP/SSH interface
           internalDns: false,
           id: 1,
+        },
+        {
+          // OT network: ot-gateway (OT-side NIC) + inverter-emulator
+          internalDns: false,
+          id: 2,
         },
       ],
       dnsConfig: [],
       instances: [
         {
+          // OT management gateway — dual-homed jump host bridging both networks.
+          type: "linux",
+          image: "ot-management-gateway:latest",
+          post: "ot-gateway",
+          networks: [ 1, 2 ],
+          lastOctet: 10,
+          name: "ot-gateway",
+          flavor: "server-small",
+          hostname: "ot-gateway",
+          configFiles: [
+            { source: "/cave/backend/configs/phase-1d/ot-gateway.env", destination: "/home/ubuntu/.env" },
+          ],
+          postCommand: "/home/ubuntu/run.sh",
+        },
+        {
+          // SMA inverter emulator — OT network only, directly reachable from the gateway.
           type: "linux",
           image: "inverter-emulator:latest",
           post: "inverter-emulator",
-          networks: [ 1 ],
-          lastOctet: 10,
+          networks: [ 2 ],
+          lastOctet: 15,
           macAddress: null,
           name: "inverter-emulator",
           flavor: "server-small",
@@ -56,8 +78,8 @@
           flavor: "server-large",
           hostname: "openhands",
           configFiles: [
-            { source: "/cave/backend/configs/phase-1c/openhands.env", destination: "/home/ubuntu/.env" },
-            { source: "/cave/backend/configs/phase-1c/mcp-servers.json", destination: "/home/ubuntu/mcp-servers.json" },
+            { source: "/cave/backend/configs/shared/openhands/openhands.env", destination: "/home/ubuntu/.env" },
+            { source: "/cave/backend/configs/shared/openhands/mcp-servers-only-neo4j.json", destination: "/home/ubuntu/mcp-servers.json" },
           ],
           postCommand: "/home/ubuntu/run.sh",
         },
