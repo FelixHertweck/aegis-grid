@@ -189,8 +189,7 @@
           path: "{{ share_path }}"
           description: "Corporate shared documents"
           list: yes
-          read:
-            - "Authenticated Users"
+          read: "Authenticated Users"
           state: present
 
     - name: Enable NTLM
