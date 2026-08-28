@@ -11,7 +11,10 @@ verifies via XCBR.Pos.stVal that the breaker is closed.
 Connects to the OT proxy, which forwards the Operate call upstream to the IED
 per the write rules in proxy-config.yml.
 
-Requires: pip install pyiec61850  (Python <= 3.12)
+Requires: pyiec61850 — publishes only a pre-release wheel, for CPython <= 3.12:
+    python3.12 -m venv .venv && . .venv/bin/activate
+    pip install --pre pyiec61850
+(eval.sh / reset.sh do this automatically.)
 
 Usage:
   python reset.py                    # OT proxy at 10.1.1.15:102
@@ -24,13 +27,14 @@ import sys
 try:
     import pyiec61850 as iec61850
 except ImportError:
-    sys.exit("pyiec61850 not installed — run: pip install pyiec61850")
+    sys.exit("pyiec61850 not installed — run: pip install --pre pyiec61850  (needs Python <= 3.12)")
 
 # ctlModel values per IEC 61850-7-2
 # 0 = status-only, 1 = direct-with-normal-security, 2 = sbo-with-normal-security
 # 3 = direct-with-enhanced-security, 4 = sbo-with-enhanced-security
-CTL_DIRECT = {1, 3}
-CTL_SBO    = {2, 4}
+CTL_DIRECT       = {1, 3}
+CTL_SBO          = {2, 4}
+CTL_SBO_ENHANCED = {4}  # needs SelectWithValue, not a bare Select
 
 CLOSED_STVAL = 2  # Dbpos: 1 = off/open, 2 = on/closed
 DBPOS = {0: "intermediate-state", 1: "off/open", 2: "on/closed", 3: "bad-state"}
@@ -116,29 +120,62 @@ def read_stval(con, ld: str, ln: str) -> int | None:
 
 # ── Operate ───────────────────────────────────────────────────────────────────
 
-def close_breaker(con, ld: str, ln: str, ctl_model: int) -> bool:
-    """Issue Control.Operate(ctlVal=true) using the appropriate control model."""
+def print_last_appl_error(ctl) -> None:
+    """Print the device's LastApplError (error code + AddCause) if one is set."""
+    try:
+        e = iec61850.ControlObjectClient_getLastApplError(ctl)
+    except Exception:
+        return
+    if e is None or getattr(e, "error", 0) == 0:
+        return
+    print(f"  LastApplError: error={e.error} addCause={e.addCause} "
+          f"ctlNum={getattr(e, 'ctlNum', '?')}  "
+          f"(AddCause: see IEC 61850-7-2 — e.g. 3=Select-failed, "
+          f"8=Object-not-selected, 20=Blocked-by-interlocking, "
+          f"22=Blocked-by-synchrocheck, 26=Blocked-by-Mode)")
+
+
+def operate_pos(con, ld: str, ln: str, ctl_model: int, ctl_val: bool) -> bool:
+    """Issue Control.Operate on {ld}/{ln}.Pos with the given boolean ctlVal,
+    using the select/operate flavour required by ctl_model.
+
+    ctlVal semantics: True = on/close, False = off/open.
+    SBO enhanced-security (ctlModel 4) needs SelectWithValue; normal (2) a bare Select.
+    """
     pos_ref = f"{ld}/{ln}.Pos"
     ctl = iec61850.ControlObjectClient_create(pos_ref, con)
     if ctl is None:
         print(f"  ERROR — could not create control object for {pos_ref}")
         return False
 
+    val_str = "true" if ctl_val else "false"
+
     if ctl_model in CTL_SBO:
-        print(f"  Control model: SBO (ctlModel={ctl_model}) — issuing Select …")
-        ok = iec61850.ControlObjectClient_select(ctl)
+        if ctl_model in CTL_SBO_ENHANCED:
+            print(f"  Control model: SBO enhanced (ctlModel={ctl_model}) — SelectWithValue(ctlVal={val_str}) …")
+            ok = iec61850.ControlObjectClient_selectWithValue(ctl, iec61850.MmsValue_newBoolean(ctl_val))
+        else:
+            print(f"  Control model: SBO normal (ctlModel={ctl_model}) — Select …")
+            ok = iec61850.ControlObjectClient_select(ctl)
         if not ok:
             print("  ERROR — Select failed")
+            print_last_appl_error(ctl)
             return False
         print("  Select OK")
 
-    print("  Issuing Operate(ctlVal=true) …")
-    ok = iec61850.ControlObjectClient_operate(ctl, iec61850.MmsValue_newBoolean(True), 0)
+    print(f"  Issuing Operate(ctlVal={val_str}) …")
+    ok = iec61850.ControlObjectClient_operate(ctl, iec61850.MmsValue_newBoolean(ctl_val), 0)
     if not ok:
         print("  ERROR — Operate failed")
+        print_last_appl_error(ctl)
         return False
 
     return True
+
+
+def close_breaker(con, ld: str, ln: str, ctl_model: int) -> bool:
+    """Issue Control.Operate(ctlVal=true) — close the breaker."""
+    return operate_pos(con, ld, ln, ctl_model, True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
