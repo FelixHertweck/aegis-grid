@@ -1,0 +1,31 @@
+---
+- name: Build Image
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    hostname: "DC01"
+    # Pre-promotion box: "Remote Desktop Users" only gains meaning once this is a
+    # DC, and domain-promotion.yml wires RDP access then.
+    rdp_users_match_admins: false
+  tasks:
+
+    # Do NOT guard later tasks with until/retries instead of this - it doesn't
+    # retry connection-level exceptions ([Errno 111] would kill the run outright).
+    - name: Wait for first boot and let cloudbase-init settle, then disable it
+      ansible.builtin.include_tasks: ../win-common/wait-for-first-boot.yml
+
+    - name: Remote access, Defender-off, hostname, mid-build reboot (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-access.yml
+
+    - name: Pre-stage the AD Domain Services role (binaries only — promotion happens at deploy-time, see domain-promotion.yml)
+      ansible.windows.win_feature:
+        name: AD-Domain-Services
+        include_management_tools: yes
+        state: present
+
+    - name: NTLM, execution policy, UAC-off, Private profile (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-finalize.yml
+
+    - name: Generalize this image with Sysprep
+      ansible.builtin.include_tasks: ../win-common/sysprep.yml

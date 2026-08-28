@@ -26,6 +26,7 @@ Scenarios use [OpenHands](https://github.com/All-Hands-AI/OpenHands) as the auto
   * **`ot-management-gateway/`**: OT management gateway image (HTTP admin + SSH).
   * **`ot-proxy/`**: Modbus TCP and IEC 61850 security proxy image.
   * **`protection-relay-emulator/`**: IEC 61850 protection relay emulator image.
+  * **`win-domain-controller/`**: Windows Server 2022 Active Directory domain controller image (Scenario 3.3).
 * **`inverter-emulator/`**: Source code for the SMA solar inverter emulator (Java/Maven).
 * **`openhands_exporter/`**: Script to convert OpenHands conversation export ZIPs into readable Markdown files.
 * **`oracle/`**: Source code for the Oracle hint service (Python/FastMCP) — on-demand, per-category, tiered hints for the attacker LLM. See [oracle/README.md](oracle/README.md).

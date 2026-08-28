@@ -1,0 +1,68 @@
+---
+- name: Build Image
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    hostname: "FS01"
+    share_name: "Shared"
+    share_path: "C:\\Shares\\Shared"
+    reader_user: "fileserver_reader"
+    reader_password: "9Rz3ALCAFG43B77!"
+  tasks:
+
+    # Do NOT guard later tasks with until/retries instead of this - it doesn't
+    # retry connection-level exceptions ([Errno 111] would kill the run outright).
+    - name: Wait for first boot and let cloudbase-init settle, then disable it
+      ansible.builtin.include_tasks: ../win-common/wait-for-first-boot.yml
+
+    - name: Remote access, Defender-off, hostname, mid-build reboot (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-access.yml
+
+    - name: Dedicated low-privilege share-reader account
+      block:
+      - name: Create {{ reader_user }} (not a member of Administrators)
+        ansible.windows.win_user:
+          name: "{{ reader_user }}"
+          password: "{{ reader_password }}"
+          state: present
+          groups:
+            - "Users"
+          password_never_expires: yes
+
+    - name: File Server role and share
+      block:
+      - name: Install File Server role
+        ansible.windows.win_feature:
+          name: FS-FileServer
+          state: present
+
+      - name: Create share folder {{ share_path }}
+        ansible.windows.win_file:
+          path: "{{ share_path }}"
+          state: directory
+
+      - name: Grant read-only NTFS permissions to Authenticated Users on the share folder
+        ansible.windows.win_acl:
+          path: "{{ share_path }}"
+          user: "Authenticated Users"
+          rights: "Read,ReadAndExecute"
+          type: allow
+          inherit: ContainerInherit, ObjectInherit
+          propagation: None
+          state: present
+
+      - name: Publish the SMB share
+        ansible.windows.win_share:
+          name: "{{ share_name }}"
+          path: "{{ share_path }}"
+          description: "Corporate shared documents"
+          list: yes
+          read: "Authenticated Users"
+          state: present
+
+    - name: NTLM, execution policy, UAC-off, Private profile (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-finalize.yml
+
+    - name: Generalize this image with Sysprep
+      ansible.builtin.include_tasks: ../win-common/sysprep.yml

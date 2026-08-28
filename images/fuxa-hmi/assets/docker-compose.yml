@@ -1,0 +1,25 @@
+services:
+  fuxa-hmi:
+    image: frangoteam/fuxa:latest
+    container_name: fuxa-hmi
+    restart: unless-stopped
+    ports:
+      - "1881:1881"
+    volumes:
+      - fuxa_appdata:/usr/src/app/FUXA/server/_appdata
+      - fuxa_db:/usr/src/app/FUXA/server/_db
+      - fuxa_logs:/usr/src/app/FUXA/server/_logs
+      - ./mysettings.json:/usr/src/app/FUXA/server/_appdata/mysettings.json:ro
+    networks:
+      - fuxa-hmi-net
+
+networks:
+  fuxa-hmi-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1442"
+
+volumes:
+  fuxa_appdata:
+  fuxa_db:
+  fuxa_logs:

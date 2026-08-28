@@ -1,0 +1,133 @@
+---
+- name: Build Image
+  hosts: all
+  gather_facts: no
+  become: no
+  tasks:
+
+    # Do NOT guard later tasks with until/retries instead of this - it doesn't
+    # retry connection-level exceptions ([Errno 111] would kill the run outright).
+    - name: Wait for first boot and let cloudbase-init settle, then disable it
+      ansible.builtin.include_tasks: ../win-common/wait-for-first-boot.yml
+
+    - name: Remote access, Defender-off, mid-build reboot (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-access.yml
+
+    - name: Install RSAT for Active Directory
+      block:
+        - name: Install RSAT Active Directory (Windows 11 capability)
+          ansible.windows.win_powershell:
+            script: |
+              if (!(Get-Command Get-ADUser -ErrorAction SilentlyContinue)) {
+                  Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+              }
+
+    - name: Ordinary user-facing software
+      block:
+      # Pinned to ftp.fau.de on purpose - the upstream /old/ archive host
+      # throttles to ~0.22 MB/s, longer than any WinRM connection survives.
+      - name: Download LibreOffice MSI
+        ansible.windows.win_get_url:
+          url: "https://ftp.fau.de/tdf/libreoffice/stable/25.8.7/win/x86_64/LibreOffice_25.8.7_Win_x86-64.msi"
+          dest: "C:\\Windows\\Temp\\LibreOffice.msi"
+          timeout: 600
+        register: libreoffice_dl
+        until: libreoffice_dl is succeeded
+        retries: 3
+        delay: 10
+
+      # cloudbase-init is disabled by this point - it was the only thing
+      # that ever cut this connection, so no retry wrapper is needed.
+      - name: Install LibreOffice
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\LibreOffice.msi"
+          arguments: "/quiet /norestart /log C:\\Windows\\Temp\\lo-install.log"
+          state: present
+
+      - name: Download 7-Zip
+        ansible.windows.win_get_url:
+          url: "https://www.7-zip.org/a/7z2408-x64.exe"
+          dest: "C:\\Windows\\Temp\\7zip.exe"
+        register: sevenzip_dl
+        retries: 5
+        delay: 10
+        until: sevenzip_dl is succeeded
+
+      - name: Install 7-Zip
+        ansible.windows.win_package:
+          path: "C:\\Windows\\Temp\\7zip.exe"
+          arguments: "/S"
+          state: present
+
+    - name: Lived-in default profile (copied into every new user profile on first logon)
+      block:
+      - name: Create default-profile folders
+        ansible.windows.win_file:
+          path: "C:\\Users\\Default\\{{ item }}"
+          state: directory
+        loop:
+          - Desktop
+          - Documents
+          - Downloads
+
+      - name: Place generic desktop clutter
+        ansible.windows.win_copy:
+          dest: "C:\\Users\\Default\\Desktop\\IT-Contact.txt"
+          content: |
+            For issues with your computer, login, or printer, please open a ticket in the helpdesk portal.
+            For urgent matters: internal extension 4200.
+
+      - name: Place generic document clutter
+        ansible.windows.win_copy:
+          dest: "C:\\Users\\Default\\Documents\\{{ item.name }}"
+          content: "{{ item.content }}"
+        loop:
+          - name: "Team_Meeting_Minutes.txt"
+            content: |
+              Team Meeting Minutes
+
+              Attendees: Team
+              Agenda:
+              - Status update on ongoing projects
+              - Planning for next quarter
+              - Miscellaneous
+
+              Next meeting: see calendar invite.
+          - name: "Vacation_Request_Template.txt"
+            content: |
+              Vacation Request
+
+              Name:
+              Period from/to:
+              Covered by:
+
+              Please send the completed form to HR.
+
+      - name: Place generic downloads clutter
+        ansible.windows.win_copy:
+          dest: "C:\\Users\\Default\\Downloads\\Expense_Report_Template.txt"
+          content: |
+            Expense Report
+
+            Date:
+            Purpose:
+            Costs (travel/lodging/meals):
+            Receipts attached: yes/no
+
+    - name: Print Spooler running
+      block:
+        - name: Ensure Print Spooler starts automatically
+          ansible.windows.win_service:
+            name: Spooler
+            start_mode: auto
+            state: started
+
+    - name: NTLM, execution policy, UAC-off, Private profile (shared baseline)
+      ansible.builtin.include_tasks: ../win-common/base-finalize.yml
+
+    # Importers (win11-patient-zero, win11-engineering-workstation) pass
+    # run_sysprep_in_base=false and sysprep themselves - generalizing twice
+    # corrupts image state.
+    - name: Generalize this image with Sysprep
+      when: run_sysprep_in_base | default(true) | bool
+      ansible.builtin.include_tasks: ../win-common/sysprep.yml

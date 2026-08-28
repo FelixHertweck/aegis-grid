@@ -1,0 +1,56 @@
+---
+- import_playbook: ../win11-workstation/playbook.yml
+
+- name: Configure VM1 (Patient Zero) foothold
+  hosts: all
+  gather_facts: no
+  become: no
+  vars:
+    foothold_user: "employee"
+    foothold_password: "3xNtNk7Ntjkhq26o"
+  tasks:
+
+    - name: Wait until WinRM is available
+      wait_for_connection:
+        timeout: 300
+        sleep: 10
+
+    - name: Create foothold user account (the phished employee, already local admin)
+      ansible.windows.win_user:
+        name: "{{ foothold_user }}"
+        password: "{{ foothold_password }}"
+        state: present
+        groups:
+          - "Users"
+          - "Administrators"
+        password_never_expires: yes
+
+    - name: Create a profile for the foothold account
+      ansible.windows.win_user_profile:
+        username: "{{ foothold_user }}"
+        name: "{{ foothold_user }}"
+        state: present
+
+    - name: Place the credential-exposure script (runs as SYSTEM, authenticates as caveadmin over the network)
+      ansible.windows.win_copy:
+        dest: "C:\\Windows\\NTLM_Exposure.ps1"
+        content: |
+          $securePassword = ConvertTo-SecureString "UzKDtoM0yaCIjUDG" -AsPlainText -Force
+          $credential = New-Object System.Management.Automation.PSCredential(".\caveadmin", $securePassword)
+          Invoke-Command -ComputerName $env:COMPUTERNAME -Credential $credential -ScriptBlock { whoami } -ErrorAction SilentlyContinue
+
+    - name: Schedule a recurring SYSTEM task that authenticates as caveadmin (exposes its credential in LSASS)
+      ansible.windows.win_shell: |
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Windows\NTLM_Exposure.ps1"
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Seconds 60)
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -DontStopOnIdleEnd
+
+        $taskName = "NTLM_Exposure"
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        }
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+
+    - name: Generalize this image with Sysprep
+      ansible.builtin.include_tasks: ../win-common/sysprep.yml

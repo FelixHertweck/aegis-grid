@@ -1,0 +1,81 @@
+---
+# cloudbase-init's first run reboots the box (hostname change) while we're
+# connected to it - this survives that, then disables the service so it
+# can't happen again. MTU is a persistent NIC setting, so disabling it here
+# doesn't affect throughput (verified live).
+- name: Wait for WinRM to come up after first boot
+  ansible.builtin.wait_for_connection:
+    timeout: 900
+    sleep: 10
+
+- name: Build the cloudbase-init completion probe
+  ansible.builtin.set_fact:
+    cbi_probe: |
+      # The rename cloudbase-init queues stays pending after the service has
+      # stopped and logged, so service state alone reports DONE while the
+      # reboot is still to come.
+      $cn = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName').ComputerName
+      $acn = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName').ComputerName
+      if ($cn -ne $acn) { Write-Output "REBOOT-PENDING - rename $acn -> $cn"; exit 0 }
+      $svcs = @(Get-Service -Name 'cloudbase-init*' -ErrorAction SilentlyContinue)
+      if ($svcs.Count -eq 0) { Write-Output 'DONE - no cloudbase-init service on this image'; exit 0 }
+      $busy = @($svcs | Where-Object { $_.Status -ne 'Stopped' })
+      if ($busy.Count -gt 0) {
+        $names = ($busy | ForEach-Object { $_.Name + '=' + $_.Status }) -join ' '
+        Write-Output "RUNNING - $names"
+        exit 0
+      }
+      $boot = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+      $logs = @(Get-ChildItem -ErrorAction SilentlyContinue -Path @(
+        'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\log\*.log',
+        'C:\Program Files (x86)\Cloudbase Solutions\Cloudbase-Init\log\*.log'))
+      if ($logs.Count -eq 0) {
+        $up = ((Get-Date) - $boot).TotalSeconds
+        if ($up -lt 300) { Write-Output ('RUNNING - no log to check, only ' + [int]$up + 's since boot'); exit 0 }
+        Write-Output 'DONE - no cloudbase-init log, settle window elapsed'
+        exit 0
+      }
+      $newest = ($logs | Sort-Object LastWriteTime -Descending)[0]
+      if ($newest.LastWriteTime -lt $boot) {
+        Write-Output ('RUNNING - stopped, but has not logged since boot (' + $newest.LastWriteTime + ' < ' + $boot + ')')
+        exit 0
+      }
+      Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
+
+- name: Check whether cloudbase-init still owes us a reboot
+  ansible.windows.win_shell: "{{ cbi_probe }}"
+  register: cbi_initial
+  changed_when: false
+
+# The reboot lands ~45s after WinRM first answers, and wait_for_connection
+# can't wait out a reboot that hasn't started - it connects to the still-up
+# box and returns at once. So sit out the whole window with pause, which
+# runs nothing on the box and so can't be cut mid-command, and only then
+# reconnect.
+- name: Ride out cloudbase-init's reboot
+  when: cbi_initial.stdout is not search('DONE')
+  block:
+    - name: Sit out the reboot window
+      ansible.builtin.pause:
+        seconds: 150
+
+    - name: Wait for WinRM to come back
+      ansible.builtin.wait_for_connection:
+        timeout: 1800
+        sleep: 15
+
+- name: Confirm cloudbase-init is finished
+  ansible.windows.win_shell: "{{ cbi_probe }}"
+  register: cbi
+  changed_when: false
+  until: cbi.stdout is search('DONE')
+  retries: 60
+  delay: 10
+
+# Disabled so it can't interrupt anything later in the build; re-enabled
+# right before Sysprep (see sysprep.yml) for the real customer-facing boot.
+- name: Disable cloudbase-init for the rest of the build
+  ansible.windows.win_service:
+    name: cloudbase-init
+    state: stopped
+    start_mode: disabled

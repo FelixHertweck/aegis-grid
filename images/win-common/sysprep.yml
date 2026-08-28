@@ -1,0 +1,152 @@
+---
+# {{ playbook_dir }} resolves to the including play's own directory, not
+# win-common/ - each image ships its own unattend.xml with its own admin
+# password.
+
+# Sysprep hangs forever instead of erroring if a servicing operation is
+# pending - Windows Capabilities installed earlier leave one. One more
+# reboot clears it.
+- name: Reboot to clear any pending servicing operations before Sysprep
+  ansible.windows.win_reboot:
+    msg: "Rebooting to clear pending updates before Sysprep"
+    reboot_timeout: 900
+    post_reboot_delay: 60
+
+- name: Ensure the Panther\Unattend directory exists
+  ansible.windows.win_file:
+    path: "C:\\Windows\\Panther\\Unattend"
+    state: directory
+
+- name: Upload unattend.xml for Sysprep
+  ansible.windows.win_copy:
+    src: "{{ playbook_dir }}/unattend.xml"
+    dest: "C:\\Windows\\Panther\\Unattend\\unattend.xml"
+
+# Sysprep fails if the OS volume is still encrypted (base image can have an
+# orphaned BitLocker state). Bounded wait so a real problem fails loud.
+- name: Decrypt the OS volume if BitLocker/Device Encryption is on
+  ansible.windows.win_powershell:
+    script: |
+      $vol = Get-BitLockerVolume -MountPoint C:
+      if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+        Disable-BitLocker -MountPoint C: | Out-Null
+        $t = 3600
+        while ($t -gt 0 -and $vol.VolumeStatus -ne 'FullyDecrypted') {
+          Start-Sleep -Seconds 10
+          $t -= 10
+          $vol = Get-BitLockerVolume -MountPoint C:
+          Write-Output ('BitLocker ' + $vol.VolumeStatus + ' ' + $vol.EncryptionPercentage + '%')
+        }
+        if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+          Write-Error 'BitLocker did not finish decrypting before timeout'
+          exit 1
+        }
+      }
+
+# Re-arm cloudbase-init's startup type so it runs normally on the real
+# post-generalize boot.
+- name: Re-enable cloudbase-init for the post-generalize boot
+  ansible.windows.win_service:
+    name: cloudbase-init
+    start_mode: auto
+
+# /generalize tears down the WinRM listener mid-run, so Sysprep can't run
+# inside one held-open WinRM call. Instead it runs detached as a SYSTEM
+# scheduled task and reports its result via a marker file.
+- name: Make sure the box is reachable before starting Sysprep
+  ansible.builtin.wait_for_connection:
+    timeout: 1800
+    sleep: 15
+
+- name: Drop any stale Sysprep result marker
+  ansible.windows.win_file:
+    path: C:\Windows\Temp\sysprep-result.txt
+    state: absent
+
+- name: Stage the detached Sysprep runner
+  ansible.windows.win_copy:
+    dest: C:\Windows\Temp\run-sysprep.ps1
+    content: |
+      $ErrorActionPreference = 'Stop'
+      $marker = 'C:\Windows\Temp\sysprep-result.txt'
+      try {
+          Set-Content -Path $marker -Value 'RUNNING' -Encoding ASCII
+          $p = Start-Process -FilePath 'C:\Windows\System32\Sysprep\Sysprep.exe' -PassThru -ArgumentList '/oobe', '/generalize', '/quiet', '/quit', '/unattend:C:\Windows\Panther\Unattend\unattend.xml'
+          $null = $p.Handle  # cache the handle or ExitCode comes back null
+          if (-not $p.WaitForExit(1800000)) {
+              Set-Content -Path $marker -Value 'TIMEOUT - sysprep still running after 30 minutes' -Encoding ASCII
+              exit 1
+          }
+          $state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+          if ($p.ExitCode -ne 0) {
+              Set-Content -Path $marker -Value "FAILED - sysprep exit code $($p.ExitCode), ImageState=$state" -Encoding ASCII
+              exit 1
+          }
+          if ($state -ne 'IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE') {
+              Set-Content -Path $marker -Value "FAILED - unexpected ImageState=$state" -Encoding ASCII
+              exit 1
+          }
+          Set-Content -Path $marker -Value "OK: ImageState=$state" -Encoding ASCII
+      } catch {
+          Set-Content -Path $marker -Value "ERROR - $($_.Exception.Message)" -Encoding ASCII
+          exit 1
+      }
+      Start-Process -FilePath 'shutdown.exe' -ArgumentList '/s', '/t', '30', '/f'
+      & schtasks.exe /Delete /TN OcelotSysprep /F | Out-Null
+
+- name: Launch Sysprep detached via the task scheduler
+  ansible.windows.win_shell: |
+    if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') {
+      Write-Output 'ALREADY LAUNCHED - runner already wrote its marker'
+      exit 0
+    }
+    $tr = 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -NoProfile -File C:\Windows\Temp\run-sysprep.ps1'
+    & schtasks.exe /Create /TN OcelotSysprep /TR $tr /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F
+    if ($LASTEXITCODE -ne 0) { throw "schtasks /Create failed ($LASTEXITCODE)" }
+    & schtasks.exe /Run /TN OcelotSysprep
+    if ($LASTEXITCODE -ne 0) { throw "schtasks /Run failed ($LASTEXITCODE)" }
+    Write-Output 'LAUNCHED'
+  register: sysprep_launch
+  changed_when: true
+  until: sysprep_launch.stdout is defined and sysprep_launch.stdout is search('LAUNCHED')
+  retries: 10
+  delay: 30
+
+# A successful Sysprep powers the box off, so there is no verdict to poll
+# for - the box never coming back is the success signal. Sit out the whole
+# window without touching it, then let the reconnect decide: still up means
+# something went wrong and the marker says what.
+- name: Sit out the Sysprep window
+  ansible.builtin.pause:
+    seconds: 360
+
+- name: See whether the box comes back
+  ansible.builtin.wait_for_connection:
+    timeout: 180
+    sleep: 20
+  register: sysprep_reconnect
+  # Timing out here is the success case, not a failure.
+  failed_when: false
+
+- name: Read the verdict off the box that stayed up
+  ansible.windows.win_shell: |
+    $m = if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') { (Get-Content 'C:\Windows\Temp\sysprep-result.txt' -Raw).Trim() } else { 'no marker' }
+    $s = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
+    Write-Output "$m | ImageState=$s"
+  register: sysprep_final
+  changed_when: false
+  until: sysprep_final.stdout is search('OK:|FAILED|TIMEOUT|ERROR|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
+  retries: 40
+  delay: 15
+  when: sysprep_reconnect.elapsed | int < 180
+
+- name: Sysprep outcome
+  ansible.builtin.debug:
+    msg: "{{ sysprep_final.stdout | default('box powered itself off - Sysprep completed', true) | trim }}"
+
+- name: Fail if Sysprep did not generalize the image
+  ansible.builtin.fail:
+    msg: "Sysprep runner reported: {{ sysprep_final.stdout | trim }} - see C:\\Windows\\System32\\Sysprep\\Panther\\setuperr.log on the build VM"
+  when:
+    - sysprep_final.stdout is defined
+    - sysprep_final.stdout is not search('OK:|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
