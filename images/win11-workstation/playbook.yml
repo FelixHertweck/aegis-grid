@@ -5,11 +5,8 @@
   become: no
   tasks:
 
-    # Safety net for first-boot flakiness (e.g. the base image's one-time NIC
-    # reinstall). Do NOT guard later tasks with until/retries instead: Ansible's
-    # generic task-retry wrapper does not retry connection-level exceptions, so
-    # a mid-playbook [Errno 111] kills the run without a single retry attempt.
-    # wait_for_connection is the only primitive here that polls through them.
+    # Do NOT guard later tasks with until/retries instead of this - it doesn't
+    # retry connection-level exceptions ([Errno 111] would kill the run outright).
     - name: Wait for first boot and let cloudbase-init settle, then disable it
       ansible.builtin.include_tasks: ../win-common/wait-for-first-boot.yml
 
@@ -153,15 +150,8 @@
 
     - name: Ordinary user-facing software
       block:
-      # Pinned to a fast mirror on purpose. The upstream
-      # downloadarchive.documentfoundation.org host that serves /old/
-      # releases is throttled hard: measured from a build VM it delivered
-      # 0.22 MB/s, so this 349 MB file needed ~26 minutes and no WinRM
-      # connection survives being held open for a single operation that
-      # long. Every "connection reset" failure on this task traced back to
-      # that, not to the download logic. The same file off ftp.fau.de runs
-      # at ~125 MB/s (~3s). 25.8.7 rather than 25.8.2.2 because the fast
-      # mirrors only carry current stable, never the /old/ archive.
+      # Pinned to ftp.fau.de on purpose - the upstream /old/ archive host
+      # throttles to ~0.22 MB/s, longer than any WinRM connection survives.
       - name: Download LibreOffice MSI
         ansible.windows.win_get_url:
           url: "https://ftp.fau.de/tdf/libreoffice/stable/25.8.7/win/x86_64/LibreOffice_25.8.7_Win_x86-64.msi"
@@ -172,10 +162,8 @@
         retries: 3
         delay: 10
 
-      # cloudbase-init is disabled for the whole build by this point (see
-      # win-common/wait-for-first-boot.yml) - it was the only thing that
-      # ever cut this connection mid-install, so the retry/reconnect
-      # machinery that used to sit here is gone.
+      # cloudbase-init is disabled by this point - it was the only thing
+      # that ever cut this connection, so no retry wrapper is needed.
       - name: Install LibreOffice
         ansible.windows.win_package:
           path: "C:\\Windows\\Temp\\LibreOffice.msi"
@@ -302,12 +290,9 @@
       ansible.builtin.pause:
         seconds: 30
 
-    # win11-patient-zero and win11-engineering-workstation import this play
-    # and then run their own play on top of it. Generalizing here would leave
-    # them modifying an already-sysprepped image and generalizing a second
-    # time, which corrupts image state - /generalize is not repeatable. They
-    # pass run_sysprep_in_base=false and carry their own copy of this block at
-    # the end of their own play instead.
+    # Importers (win11-patient-zero, win11-engineering-workstation) pass
+    # run_sysprep_in_base=false and sysprep themselves - generalizing twice
+    # corrupts image state.
     - name: Generalize this image with Sysprep
       when: run_sysprep_in_base | default(true) | bool
       ansible.builtin.include_tasks: ../win-common/sysprep.yml

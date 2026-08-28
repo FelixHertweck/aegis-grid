@@ -35,10 +35,8 @@
 
     - name: IEC 61850 client tooling
       block:
-      # Measured from a build VM this comes off GitHub at ~76 MB/s (171 MB
-      # in ~2s), so it needs no special handling - unlike the LibreOffice
-      # download in the imported base playbook, which was only fragile
-      # because its throttled archive host took ~26 minutes.
+      # GitHub serves this at ~76 MB/s, so unlike LibreOffice in the base
+      # playbook it needs no special handling.
       - name: Download Eclipse Temurin 21 JDK (Windows x64 MSI)
         ansible.windows.win_get_url:
           url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.msi"
@@ -49,10 +47,8 @@
         retries: 3
         delay: 10
 
-      # cloudbase-init is disabled for the whole build by this point (see
-      # win-common/wait-for-first-boot.yml, applied in the imported first
-      # play) - it was the only thing that ever cut this connection
-      # mid-install, so no retry/reconnect wrapper is needed here.
+      # cloudbase-init is disabled by this point (applied in the imported
+      # base play) - no retry wrapper needed here.
       - name: Install Temurin JDK (sets JAVA_HOME + PATH, no GUI)
         ansible.windows.win_package:
           path: "C:\\Windows\\Temp\\temurin-jdk21.msi"
@@ -86,14 +82,5 @@
             @echo off
             java -cp "C:\Tools\iec61850bean\lib\*" com.beanit.iec61850bean.app.ConsoleClient %*
 
-    # Sysprep validates that no update/servicing operation is pending
-    # ("reserved storage in use") and, just like the BitLocker case, doesn't
-    # exit cleanly on that failure - it just hangs forever instead. Installing
-    # Windows Capabilities (OpenSSH, RSAT) above leaves a pending reboot/CBS
-    # state that trips this validation. Confirmed live: RebootPending and
-    # RebootRequired were both true, and Sysprep's own log showed exactly
-    # this failure (hr = 0x800F0975) the moment it started, with the process
-    # then sitting idle for hours instead of returning an error. One more
-    # reboot right before Sysprep clears that state.
     - name: Generalize this image with Sysprep
       ansible.builtin.include_tasks: ../win-common/sysprep.yml

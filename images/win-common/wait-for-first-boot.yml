@@ -1,18 +1,8 @@
 ---
-# Included once, from the first play of every Windows image, right after the
-# VM's first boot. cloudbase-init's own first run is the one disruption in
-# this build we cannot avoid: we have to be connected to disable it, and
-# connecting is exactly what its post-boot reconfiguration (MTU 1442,
-# adapter rename, WinRM listener rebuild - confirmed live via
-# cloudbase-init.log timeline correlation) keeps interrupting. Everything
-# below exists to survive that one unavoidable window; nothing later in the
-# build needs it, because the very last task here disables the service.
-#
-# Verified live (2026-08-28, a dedicated VM boot/reboot experiment): the MTU
-# it sets is a persistent NIC setting, not something reapplied every boot -
-# disabling the service after this point does not affect throughput
-# (measured ~98 MB/s on a real download afterwards, same as with the
-# service left running).
+# cloudbase-init's first run reboots the box (hostname change) while we're
+# connected to it - this survives that, then disables the service so it
+# can't happen again. MTU is a persistent NIC setting, so disabling it here
+# doesn't affect throughput (verified live).
 - name: Wait for WinRM to come up after first boot
   ansible.builtin.wait_for_connection:
     timeout: 900
@@ -46,15 +36,13 @@
       }
       Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
 
-# Two traps here, both of which bit us. First, the probe must not believe a
-# service that has not started yet (see cbi_probe above). Second, the wait
-# itself gets cut off by the very disruption it is waiting out; that is
-# ignored so the play survives, but nothing then re-checks, so a naive
-# version of this would continue while cloudbase-init was still working.
-# Ansible's until/retries cannot ride through an unreachable result (the
-# until expression references cbi.stdout, which an unreachable result does
-# not have, and that aborts the retry loop), so the recovery has to be
-# explicit: reconnect, probe again, and only the last pass is authoritative.
+# until/retries can't ride through an unreachable result (aborts on the
+# missing cbi.stdout), so recovery is explicit: reconnect, probe again, and
+# only the last pass is authoritative.
+- name: Heads-up before the disruption window
+  ansible.builtin.debug:
+    msg: "cloudbase-init may reboot the box below - WinRM errors here are expected and handled by the reconnect that follows."
+
 - name: Wait for cloudbase-init to finish its first-boot run (pass 1)
   ansible.windows.win_shell: "{{ cbi_probe }}"
   register: cbi
@@ -93,12 +81,8 @@
   retries: 60
   delay: 10
 
-# From here on cloudbase-init cannot interrupt anything else in the build:
-# every later WinRM hiccup this session traced back to it ("401 - invalid
-# content type" right after a clean Ansible run, ConnectionResetError
-# mid-download, ConnectTimeoutError after a reboot). Re-enabled right before
-# Sysprep (see win-common/sysprep.yml) so it runs normally on the real
-# customer-facing boot - verified live that it does, correctly, on its own.
+# Disabled so it can't interrupt anything later in the build; re-enabled
+# right before Sysprep (see sysprep.yml) for the real customer-facing boot.
 - name: Disable cloudbase-init for the rest of the build
   ansible.windows.win_service:
     name: cloudbase-init

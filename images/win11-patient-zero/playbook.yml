@@ -52,14 +52,5 @@
         }
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
-    # Sysprep validates that no update/servicing operation is pending
-    # ("reserved storage in use") and, just like the BitLocker case, doesn't
-    # exit cleanly on that failure - it just hangs forever instead. Installing
-    # Windows Capabilities (OpenSSH, RSAT) above leaves a pending reboot/CBS
-    # state that trips this validation. Confirmed live: RebootPending and
-    # RebootRequired were both true, and Sysprep's own log showed exactly
-    # this failure (hr = 0x800F0975) the moment it started, with the process
-    # then sitting idle for hours instead of returning an error. One more
-    # reboot right before Sysprep clears that state.
     - name: Generalize this image with Sysprep
       ansible.builtin.include_tasks: ../win-common/sysprep.yml

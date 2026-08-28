@@ -1,25 +1,11 @@
 ---
-# Included at the end of each image's own play (guarded by
-# run_sysprep_in_base for images that get configured further after
-# import_playbook - see win11-patient-zero/win11-engineering-workstation).
-# {{ playbook_dir }} resolves to the directory of whichever image's play is
-# currently running - each image ships its own unattend.xml with its own
-# admin password, verified via ansible-core's per-play basedir handling
-# (executor/playbook_executor.py sets loader basedir from the play's own
-# source file before running it, and playbook_dir is read from that same
-# basedir), not the shared win-common/ directory this file lives in.
+# {{ playbook_dir }} resolves to the including play's own directory, not
+# win-common/ - each image ships its own unattend.xml with its own admin
+# password.
 
-# Sysprep validates that no update/servicing operation is pending ("reserved
-# storage in use") and, just like the BitLocker case below, doesn't exit
-# cleanly on that failure - it just hangs forever instead. Installing
-# Windows Capabilities (OpenSSH, RSAT) earlier in the play leaves a pending
-# reboot/CBS state that trips this validation. Confirmed live: RebootPending
-# and RebootRequired were both true, and Sysprep's own log showed exactly
-# this failure (hr = 0x800F0975) the moment it started, with the process
-# then sitting idle for hours instead of returning an error. One more
-# reboot right before Sysprep clears that state. No cloudbase-init settle
-# needed here - it is disabled (see win-common/wait-for-first-boot.yml), and
-# win_reboot already polls for reconnection itself before returning.
+# Sysprep hangs forever instead of erroring if a servicing operation is
+# pending - Windows Capabilities installed earlier leave one. One more
+# reboot clears it.
 - name: Reboot to clear any pending servicing operations before Sysprep
   ansible.windows.win_reboot:
     msg: "Rebooting to clear pending updates before Sysprep"
@@ -36,12 +22,8 @@
     src: "{{ playbook_dir }}/unattend.xml"
     dest: "C:\\Windows\\Panther\\Unattend\\unattend.xml"
 
-# Sysprep hard-fails generalize if the OS volume is encrypted (base image
-# picks up an orphaned BitLocker/Device Encryption state - no key
-# protector, protection off, but VolumeStatus stays FullyEncrypted until
-# explicitly decrypted). Bounded wait so a real problem fails loud. No
-# unreachable-retry wrapper needed - cloudbase-init is disabled and this is
-# the only thing that was ever cutting this connection.
+# Sysprep fails if the OS volume is still encrypted (base image can have an
+# orphaned BitLocker state). Bounded wait so a real problem fails loud.
 - name: Decrypt the OS volume if BitLocker/Device Encryption is on
   ansible.windows.win_powershell:
     script: |
@@ -61,36 +43,16 @@
         }
       }
 
-# Re-arm cloudbase-init's startup type (not started here) so it runs
-# normally the next time this box boots - the real, customer-facing boot
-# after generalize. Verified live: with this set to Automatic beforehand, a
-# freshly-generalized image boots straight into a working OOBE/specialize
-# pass, applies MTU 1442 itself, and comes up clean.
+# Re-arm cloudbase-init's startup type so it runs normally on the real
+# post-generalize boot.
 - name: Re-enable cloudbase-init for the post-generalize boot
   ansible.windows.win_service:
     name: cloudbase-init
     start_mode: auto
 
-# Sysprep is the one step that cannot be run inside a single held-open
-# WinRM call: /generalize tears the WinRM listener down as part of the
-# generalize pass, and the run takes minutes. A previous build died on a
-# plain TCP connect timeout before Sysprep had even been launched, and the
-# box then stayed unreachable for 640s - longer than the reconnect window
-# at the time.
-#
-# So launch it detached as a SYSTEM scheduled task. Unlike Ansible's async
-# watchdog (proven not to survive on these VMs), the Task Scheduler owns the
-# process, so it does not care what happens to WinRM. The runner writes its
-# verdict to a marker file and powers the box off ONLY on success, which
-# makes the outcome decidable without WinRM having to survive generalize:
-#   marker says OK / ImageState generalized  -> success
-#   marker says FAILED / TIMEOUT / ERROR     -> fail loud, with the reason
-#   box gone and never comes back            -> the runner reached its
-#                                               shutdown line, so success
-#   box back up but not generalized          -> fail loud
-# Packer's openstack builder stops the instance via the API afterwards and
-# tolerates it already being off, so powering down here is safe. Sysprep is
-# never re-run on a connection drop: /generalize is not safely repeatable.
+# /generalize tears down the WinRM listener mid-run, so Sysprep can't run
+# inside one held-open WinRM call. Instead it runs detached as a SYSTEM
+# scheduled task and reports its result via a marker file.
 - name: Make sure the box is reachable before starting Sysprep
   ansible.builtin.wait_for_connection:
     timeout: 1800
@@ -150,10 +112,12 @@
   retries: 10
   delay: 30
 
-# Short polls: a dropped one costs a retry, not the build. The until
-# deliberately breaks out when stdout is missing - that means the box has
-# gone away, which is the expected end state, and there is no point polling
-# an absent host for another 30 minutes.
+# Short polls so a dropped one costs a retry, not the build; breaks out
+# early when stdout is missing since that means the box is gone (expected).
+- name: Heads-up before the disruption window
+  ansible.builtin.debug:
+    msg: "Sysprep /generalize tears down WinRM and reboots/powers off the box - connection errors below are expected and handled by the checks that follow."
+
 - name: Wait for Sysprep to report a verdict
   ansible.windows.win_shell: |
     if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') {

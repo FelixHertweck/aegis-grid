@@ -11,11 +11,8 @@
     reader_password: "9Rz3ALCAFG43B77!"
   tasks:
 
-    # Safety net for first-boot flakiness (e.g. the base image's one-time NIC
-    # reinstall). Do NOT guard later tasks with until/retries instead: Ansible's
-    # generic task-retry wrapper does not retry connection-level exceptions, so
-    # a mid-playbook [Errno 111] kills the run without a single retry attempt.
-    # wait_for_connection is the only primitive here that polls through them.
+    # Do NOT guard later tasks with until/retries instead of this - it doesn't
+    # retry connection-level exceptions ([Errno 111] would kill the run outright).
     - name: Wait for first boot and let cloudbase-init settle, then disable it
       ansible.builtin.include_tasks: ../win-common/wait-for-first-boot.yml
 
