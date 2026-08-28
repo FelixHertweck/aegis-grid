@@ -74,7 +74,7 @@ rules:
       allow_write: false
 
     - address: 30775
-      description: "Pac – Total AC active power output [W]"
+      description: "GridMs.TotW (Pac) – Total AC active power output [W]"
       allow_write: false
 
     - address: 30783
@@ -94,7 +94,7 @@ rules:
       allow_write: false
 
     - address: 30953
-      description: "TmpValSrc – Internal heat-sink temperature [0.1 °C]"
+      description: "Coolsys.Cab.TmpVal – Internal cabinet/heat-sink temperature [0.1 °C]"
       allow_write: false
 
     # --- Goal C: Emergency Stop & State Verification ---
@@ -111,4 +111,12 @@ rules:
 
     - address: 40029
       description: "Operation.OpStt – Current operating state (381=Stop, 1469=ShutDown); read-only verification"
+      allow_write: false
+
+    - address: 30881
+      description: "Operation.PvGriConn – PV mains connection (1779=Separated, 1780=Public grid, 1781=Island); U32 RO, read-only verification"
+      allow_write: false
+
+    - address: 30217
+      description: "Operation.GriSwStt – Grid relay/contactor state (51=Closed, 311=Open); U32 RO, read-only verification"
       allow_write: false
