@@ -11,6 +11,12 @@
 - name: Build the cloudbase-init completion probe
   ansible.builtin.set_fact:
     cbi_probe: |
+      # The rename cloudbase-init queues stays pending after the service has
+      # stopped and logged, so service state alone reports DONE while the
+      # reboot is still to come.
+      $cn = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName').ComputerName
+      $acn = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName').ComputerName
+      if ($cn -ne $acn) { Write-Output "REBOOT-PENDING - rename $acn -> $cn"; exit 0 }
       $svcs = @(Get-Service -Name 'cloudbase-init*' -ErrorAction SilentlyContinue)
       if ($svcs.Count -eq 0) { Write-Output 'DONE - no cloudbase-init service on this image'; exit 0 }
       $busy = @($svcs | Where-Object { $_.Status -ne 'Stopped' })
@@ -36,46 +42,39 @@
       }
       Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
 
-# cloudbase-init reboots the box at an unpredictable point; until/retries
-# can't ride through that, so each probe pass is followed by an
-# unconditional reconnect. Only the final pass is authoritative.
-- name: Wait for cloudbase-init's first-boot run to finish (tolerant pass)
+- name: Check whether cloudbase-init still owes us a reboot
   ansible.windows.win_shell: "{{ cbi_probe }}"
-  register: cbi
+  register: cbi_initial
   changed_when: false
-  failed_when: false
-  ignore_unreachable: true
-  until: cbi.stdout is defined and cbi.stdout is search('DONE')
-  retries: 60
-  delay: 10
 
-- name: Reconnect after any reboot that pass triggered
-  ansible.builtin.wait_for_connection:
-    delay: 20
-    timeout: 1800
-    sleep: 15
+# wait_for_connection can't wait out a reboot that hasn't started - it
+# connects to the still-up box and returns at once. Watching the port close
+# from here is the only wait that holds, and it runs nothing on the box, so
+# the reboot can't cut a command mid-flight.
+- name: Ride out cloudbase-init's reboot
+  when: cbi_initial.stdout is not search('DONE')
+  block:
+    - name: Wait for WinRM to go down
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: "{{ ansible_port | default(5985) }}"
+        state: stopped
+        timeout: 300
+      delegate_to: localhost
+      # Timing out means cloudbase-init finished without rebooting.
+      failed_when: false
 
-- name: Re-check in case a second reboot is still pending (tolerant pass)
-  ansible.windows.win_shell: "{{ cbi_probe }}"
-  register: cbi
-  changed_when: false
-  failed_when: false
-  ignore_unreachable: true
-  until: cbi.stdout is defined and cbi.stdout is search('DONE')
-  retries: 60
-  delay: 10
-
-- name: Reconnect once more before the authoritative check
-  ansible.builtin.wait_for_connection:
-    delay: 20
-    timeout: 900
-    sleep: 15
+    - name: Wait for WinRM to come back
+      ansible.builtin.wait_for_connection:
+        delay: 15
+        timeout: 1800
+        sleep: 15
 
 - name: Confirm cloudbase-init is finished
   ansible.windows.win_shell: "{{ cbi_probe }}"
   register: cbi
   changed_when: false
-  until: cbi.stdout is defined and cbi.stdout is search('DONE')
+  until: cbi.stdout is search('DONE')
   retries: 60
   delay: 10
 
