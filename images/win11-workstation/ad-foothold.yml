@@ -1,0 +1,36 @@
+---
+# Included by domain-join.yml when patient_zero=true. Grants CORP\user1 (created on the DC
+# by VulnAD.ps1) RDP + WinRM on this host but not local admin, and sets it as the autologon
+# user. Keep the credential in sync with VulnAD.ps1's New-FootholdUser.
+#
+# This is the Scenario 3.3 (Active Directory) foothold and is unrelated to the
+# images/win11-patient-zero/ image, which bakes a local-admin "employee" account for the
+# workgroup Cave scenarios.
+
+- name: Set the domain foothold credential
+  ansible.builtin.set_fact:
+    domain_foothold_user: "CORP\\user1"
+    domain_foothold_password: "Welcome123!"
+
+- name: Grant RDP (Remote Desktop Users)
+  ansible.windows.win_group_membership:
+    name: "Remote Desktop Users"
+    members: "{{ domain_foothold_user }}"
+    state: present
+
+- name: Grant WinRM (Remote Management Users, non-admin)
+  ansible.windows.win_group_membership:
+    name: "Remote Management Users"
+    members: "{{ domain_foothold_user }}"
+    state: present
+
+- name: Ensure the account is not a local administrator
+  ansible.windows.win_group_membership:
+    name: "Administrators"
+    members: "{{ domain_foothold_user }}"
+    state: absent
+
+- name: Autologon as the foothold user
+  community.windows.win_auto_logon:
+    username: "{{ domain_foothold_user }}"
+    password: "{{ domain_foothold_password }}"

@@ -1,0 +1,124 @@
+---
+# Deploy-time only — NOT a Packer provisioner. Joins the live FS01 to corp.local and
+# narrows the \\FS01\Shared read grant from "Authenticated Users" (base image) to
+# CORP\FS-Readers only (that group is created on the DC by VulnAD.ps1). Then disables
+# local caveadmin. A domain join can't be baked into a generalized image, so it's a
+# live-host run — same split as the DC's domain-promotion.yml.
+#
+#   ansible-playbook -i '<FS01_IP>,' domain-join.yml \
+#     -e ansible_user=caveadmin -e ansible_password='<the unattend.xml AdministratorPassword>' \
+#     -c winrm -e ansible_winrm_transport=ntlm -e ansible_winrm_server_cert_validation=ignore \
+#     -e ansible_port=5985 -e ansible_winrm_scheme=http
+#
+# dc_ip / target DNS default to 10.1.1.40; override with -e dc_ip=... .
+
+- name: Join corp.local and narrow the \\FS01\Shared ACL
+  hosts: all
+  gather_facts: no
+  vars:
+    domain_name: "corp.local"
+    dc_ip: "10.1.1.40"
+    # Domain Admin from VulnAD.ps1 (New-DomainAdmin) — keep in sync with the DC.
+    domain_admin_user: "CORP\\ad_admin"
+    domain_admin_password: "Hd4mNq2VbXtRfW9j!"
+    # Must match images/win-fileserver/playbook.yml.
+    share_name: "Shared"
+    share_path: "C:\\Shares\\Shared"
+    fs_readers_group: "CORP\\FS-Readers"
+
+  tasks:
+    - name: Wait until WinRM is available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Point DNS at the domain controller (Kerberos SRV resolution)
+      ansible.windows.win_dns_client:
+        adapter_names: "*"
+        dns_servers:
+          - "{{ dc_ip }}"
+
+    - name: Join the domain and set the computer name
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "fs01"
+        domain_admin_user: "{{ domain_admin_user }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+        reboot: true
+
+    - name: Wait until WinRM is available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 10
+
+    - name: Wait until the domain is reachable
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            Get-ADDomain -Server "{{ domain_name }}" -ErrorAction Stop | Out-Null
+            Write-Output "READY"
+          } catch {
+            Write-Output "FAILED"
+          }
+      register: domain_check
+      retries: 20
+      delay: 30
+      until: "'READY' in domain_check.output"
+
+    - name: Narrow the share to FS-Readers
+      block:
+        - name: Republish the SMB share with read limited to FS-Readers
+          ansible.windows.win_share:
+            name: "{{ share_name }}"
+            path: "{{ share_path }}"
+            description: "Corporate shared documents"
+            list: true
+            read: "{{ fs_readers_group }}"
+            state: present
+
+        - name: Drop the broad Authenticated Users NTFS read grant
+          ansible.windows.win_acl:
+            path: "{{ share_path }}"
+            user: "Authenticated Users"
+            rights: "Read,ReadAndExecute"
+            type: allow
+            state: absent
+
+        - name: Grant FS-Readers read on the share folder
+          ansible.windows.win_acl:
+            path: "{{ share_path }}"
+            user: "{{ fs_readers_group }}"
+            rights: "Read,ReadAndExecute"
+            type: allow
+            inherit: "ContainerInherit, ObjectInherit"
+            propagation: "None"
+            state: present
+
+    - name: Disable local caveadmin (the domain takes over via ad_admin)
+      block:
+        - name: Write the disable-caveadmin script
+          ansible.windows.win_copy:
+            dest: C:\Windows\Temp\disable.ps1
+            content: |
+              net.exe user caveadmin /active:no
+
+              Remove-Item "C:\Windows\Temp\disable.ps1" -Force
+
+        - name: Get system time +5 minutes
+          ansible.windows.win_shell: |
+            (Get-Date).AddMinutes(5).ToString('yyyy-MM-ddTHH:mm:ss')
+          register: time_plus_5
+
+        - name: Schedule the one-time disable in 5 minutes (lets this run finish first)
+          community.windows.win_scheduled_task:
+            name: disableTask
+            description: "Disable caveadmin"
+            actions:
+              - path: powershell.exe
+                arguments: -NoProfile -ExecutionPolicy Bypass -File "C:\Windows\Temp\disable.ps1"
+            triggers:
+              - type: time
+                start_boundary: "{{ time_plus_5.stdout | trim }}"
+            username: SYSTEM
+            run_level: highest
+            state: present
