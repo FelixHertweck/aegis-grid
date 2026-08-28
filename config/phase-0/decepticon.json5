@@ -53,8 +53,8 @@
           flavor: "server-large",
           hostname: "decepticon",
           configFiles: [
-            { source: "/cave/backend/configs/phase-0-decepticon/decepticon.env", destination: "/home/ubuntu/.decepticon/.env" },
-            { source: "/cave/backend/configs/phase-0-decepticon/custom-skills/", destination: "/home/ubuntu/.decepticon/custom-skills" },
+            { source: "/cave/backend/configs/phase-0/decepticon.env", destination: "/home/ubuntu/.decepticon/.env" },
+            { source: "/cave/backend/configs/phase-0/custom-skills/", destination: "/home/ubuntu/.decepticon/custom-skills" },
           ],
           postCommand: "decepticon-rebuild-web && decepticon-start",
         },

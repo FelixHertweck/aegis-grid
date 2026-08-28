@@ -13,11 +13,11 @@ Complete **steps 1 and 2** of the [main README](../../README.md) first — OpenS
 
 ## 1. Place the Deployment Config
 
-Clone the ocelot repository into `/tmp` and copy the entire `phase-0` folder into the `configs/` directory of your `cave-infrastructure-docker` checkout:
+Clone the ocelot repository into `/tmp`, then copy the `config/` tree into the `configs/` directory of your `cave-infrastructure-docker` checkout:
 
 ```bash
 git clone https://github.com/FelixHertweck/ocelot.git /tmp/ocelot
-cp -r /tmp/ocelot/config/phase-0 ./configs/
+cp -r /tmp/ocelot/config/* ./configs/
 ```
 
 ## 2. Deploy Infrastructure
@@ -32,10 +32,10 @@ To deploy non-interactively with a custom lab prefix:
 
 ```bash
 # OpenVPN
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-0/phase0-decepticon --lab-prefix ocelot-p0
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-0/decepticon --lab-prefix ocelot-p0
 
 # WireGuard
-docker compose run --rm cave /cave/deploy-wrapper.sh phase-0/phase0-decepticon --wg --lab-prefix ocelot-p0
+docker compose run --rm cave /cave/deploy-wrapper.sh phase-0/decepticon --wg --lab-prefix ocelot-p0
 ```
 
 Both VMs are fully configured automatically during deployment via `postCommand`:
