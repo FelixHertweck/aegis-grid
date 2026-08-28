@@ -52,14 +52,16 @@ ALLOWED_REGISTERS = [
     (30769, 2, "DcMs.Amp[1]",         "DC input current string 1 [mA]"),
     (30771, 2, "DcMs.Vol[1]",         "DC input voltage string 1 [0.01 V]"),
     (30773, 2, "DcMs.Watt[1]",        "DC input power string 1 [W]"),
-    (30775, 2, "Pac",                 "Total AC active power output [W]"),
+    (30775, 2, "GridMs.TotW",         "Total AC active power output [W]"),
     (30783, 2, "GridMs.PhV.phsA",     "Grid voltage phase A [0.01 V]"),
     (30785, 2, "GridMs.PhV.phsB",     "Grid voltage phase B [0.01 V]"),
     (30787, 2, "GridMs.PhV.phsC",     "Grid voltage phase C [0.01 V]"),
     (30803, 2, "GridMs.Hz",           "Grid frequency [0.01 Hz]"),
-    (30953, 2, "TmpValSrc",           "Internal heat-sink temperature [0.1 °C]"),
+    (30953, 2, "Coolsys.Cab.TmpVal",  "Internal cabinet/heat-sink temperature [0.1 °C]"),
     # State
     (40029, 2, "Operation.OpStt",     "Operating state (381=Stop, 1469=ShutDown)"),
+    (30881, 2, "Operation.PvGriConn", "PV mains connection (1779=Separated, 1780=Public grid)"),
+    (30217, 2, "Operation.GriSwStt",  "Grid relay/contactor state (51=Closed, 311=Open)"),
 ]
 
 # A register not in the allow-list → proxy should DENY it.
