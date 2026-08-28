@@ -157,6 +157,34 @@ object's `ctlModel` is SBO). Denied operations return an MMS `ServiceError`.
 - **Deny actions collapse to `REJECT`.** `SILENT_DROP` / `DISCONNECT` are not expressible per request
   on the MMS server side, so every IEC denial returns a `ServiceError`.
 
+### Enhanced-security control normalization
+
+`iec61850bean`'s server implements only the **normal-security** control state machine (`ctlModel`
+`direct-with-normal-security` and `sbo-with-normal-security`). To front an IED whose controls use
+**enhanced security** (`ctlModel` 3/4 — e.g. the physical SIPROTEC 5's `CSWI1.Pos`), the proxy
+rewrites the model it exposes downstream (`Iec61850ControlModelNormalizer`):
+
+- `ctlModel` `3 → 1`, `4 → 2`.
+- For `4 → 2`, the control object is also made structurally consistent: a plain `SBO` attribute is
+  added (the server starts a Select only when the client reads a child literally named `SBO`, which
+  an enhanced-security model lacks — it has `SBOw`), and `SBOw` / `Oper.operTm` are removed.
+
+This is **downstream-only**. The upstream model is untouched, so the forwarder still drives the
+physical IED with its real `ctlModel` and the correct `SelectWithValue` + `Operate` sequence.
+
+Not conveyed downstream (accepted limitation):
+
+- The enhanced-security **`LastApplError` AddCause** — `iec61850bean`'s *client* discards the
+  `LastApplError` report, so the proxy never sees the IED's structured failure reason. A failed
+  forward still returns the IED's MMS error code; the descriptive string is proxy-log only (MMS
+  carries just the numeric `DataAccessError` downstream).
+- The asynchronous **`CommandTermination`** — the normal-security server does not emit it.
+
+Consequence for reconnaissance: a client sees `CSWI1.Pos` as `sbo-with-normal-security`, not the
+physical device's `sbo-with-enhanced-security`. The `protection-relay-emulator` deliberately mirrors
+this (`ctlModel` 2) so agent-facing behaviour is identical whether the upstream is the emulator or
+the real IED.
+
 ### Rate limiting
 
 Every rate limit has the same shape — `max_requests` per sliding window of

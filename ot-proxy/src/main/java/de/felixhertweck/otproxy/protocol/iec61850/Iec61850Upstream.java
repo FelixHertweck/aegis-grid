@@ -116,17 +116,39 @@ public class Iec61850Upstream {
             ctlValBda.setValue(ctlVal);
 
             int ctlModelOrd = resolveCtlModelOrd(doRef);
-            if (ctlModelOrd == 2) {
-                // sbo-with-normal-security: read SBO attribute to reserve the object
-                if (!association.select(controlDo)) {
-                    throw new ServiceError(
-                            ServiceError.CONTROL_MUST_BE_SELECTED, "Select rejected for " + doRef);
+            // The IED's failure reason (LastApplError AddCause) is not recoverable here —
+            // iec61850bean's client discards the LastApplError report — so we only name which
+            // phase failed and keep the IED's MMS error code. The message string does not cross
+            // the downstream MMS boundary (clients see the numeric DataAccessError only); it is
+            // for the proxy log.
+            try {
+                if (ctlModelOrd == 2) {
+                    // sbo-with-normal-security: read SBO attribute to reserve the object
+                    if (!association.select(controlDo)) {
+                        throw new ServiceError(
+                                ServiceError.CONTROL_MUST_BE_SELECTED,
+                                "SBO returned empty (already selected by another client?)");
+                    }
+                } else if (ctlModelOrd == 4) {
+                    // sbo-with-enhanced-security: SelectWithValues writes to SBOw (includes ctlVal)
+                    selectWithValues(controlDo, ctlVal);
                 }
-            } else if (ctlModelOrd == 4) {
-                // sbo-with-enhanced-security: SelectWithValues writes to SBOw (includes ctlVal)
-                selectWithValues(controlDo, ctlVal);
+            } catch (ServiceError e) {
+                log.warn("Upstream Select failed for {}: {}", doRef, e.getMessage());
+                throw new ServiceError(
+                        e.getErrorCode(),
+                        "upstream IED rejected Select for " + doRef + ": " + e.getMessage(),
+                        e);
             }
-            association.operate(controlDo);
+            try {
+                association.operate(controlDo);
+            } catch (ServiceError e) {
+                log.warn("Upstream Operate failed for {}: {}", doRef, e.getMessage());
+                throw new ServiceError(
+                        e.getErrorCode(),
+                        "upstream IED rejected Operate for " + doRef + ": " + e.getMessage(),
+                        e);
+            }
             log.info("Forwarded control {}.Oper.ctlVal={} to upstream", doRef, ctlVal);
         }
     }

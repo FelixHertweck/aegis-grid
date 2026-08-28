@@ -12,6 +12,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.beanit.iec61850bean.BasicDataAttribute;
 import com.beanit.iec61850bean.BdaBoolean;
+import com.beanit.iec61850bean.BdaInt8;
 import com.beanit.iec61850bean.ClientAssociation;
 import com.beanit.iec61850bean.ClientSap;
 import com.beanit.iec61850bean.Fc;
@@ -46,6 +47,7 @@ class Iec61850ProxyIntegrationTest {
 
     private static final String XCBR_POS = "RelayIEDPROT/XCBR1.Pos";
     private static final String XCBR_CTLVAL = "RelayIEDPROT/XCBR1.Pos.Oper.ctlVal";
+    private static final String CSWI_POS = "RelayIEDPROT/CSWI1.Pos";
 
     private final AtomicReference<Boolean> iedReceivedCtlVal = new AtomicReference<>();
 
@@ -122,6 +124,25 @@ class Iec61850ProxyIntegrationTest {
     }
 
     @Test
+    void enhancedSecurityControlIsExposedAsNormalSecurity() throws Exception {
+        ClientAssociation association = associate(allowProxyPort);
+        try {
+            ServerModel model = association.retrieveModel();
+            association.getAllDataValues();
+
+            // The fake IED defines CSWI1.Pos as sbo-with-enhanced-security (ctlModel 4) with SBOw.
+            // The proxy must expose it as sbo-with-normal-security (2) with a plain SBO instead,
+            // so iec61850bean-based downstream clients can select-before-operate it.
+            BdaInt8 ctlModel = (BdaInt8) model.findModelNode(CSWI_POS + ".ctlModel", Fc.CF);
+            assertThat(ctlModel.getValue()).isEqualTo((byte) 2);
+            assertThat(model.findModelNode(CSWI_POS + ".SBO", Fc.CO)).isNotNull();
+            assertThat(model.findModelNode(CSWI_POS + ".SBOw", Fc.CO)).isNull();
+        } finally {
+            association.close();
+        }
+    }
+
+    @Test
     void readAllowListPrunesNonAllowlistedObjects() throws Exception {
         ClientAssociation association = associate(allowProxyPort);
         try {
@@ -178,9 +199,14 @@ class Iec61850ProxyIntegrationTest {
         pos.setAllowWrite(allowWrite);
         pos.setAllowRead(true);
 
+        Iec61850PointRuleConfig cswiPos = new Iec61850PointRuleConfig();
+        cswiPos.setReference(CSWI_POS);
+        cswiPos.setAllowWrite(allowWrite);
+        cswiPos.setAllowRead(true);
+
         RulesConfig rules = new RulesConfig();
         rules.setDefaultAction("DENY");
-        rules.setObjects(List.of(pos));
+        rules.setObjects(List.of(pos, cswiPos));
 
         ProxyConfig config = new ProxyConfig();
         config.setProtocol("iec61850");

@@ -8,7 +8,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import com.beanit.iec61850bean.BasicDataAttribute;
-import com.beanit.iec61850bean.BdaInt8;
 import com.beanit.iec61850bean.Fc;
 import com.beanit.iec61850bean.ModelNode;
 import com.beanit.iec61850bean.ServerModel;
@@ -53,7 +52,7 @@ public class Iec61850ProxyServer {
     public void start() throws IOException {
         // Filter a private copy so the server's nodes are independent of the client model.
         exposedModel = Iec61850ModelFilter.buildExposedModel(upstream.getModel().copy(), rules);
-        patchEnhancedSecurityCtlModels(exposedModel);
+        Iec61850ControlModelNormalizer.normalize(exposedModel);
 
         serverSap = new ServerSap(bindPort, 0, null, exposedModel, null);
         serverSap.startListening(new RuleEnforcingServerListener(pipeline, upstream));
@@ -87,28 +86,6 @@ public class Iec61850ProxyServer {
             }
         } catch (RuntimeException e) {
             log.warn("Value sync cycle failed: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Downgrades enhanced-security ctlModel values (3, 4) in the exposed model to their
-     * normal-security equivalents (1, 2) so iec61850bean's server can handle control requests. The
-     * upstream model is untouched, so {@link Iec61850Upstream#forwardControl} still uses the real
-     * ctlModel when forwarding to the physical IED.
-     */
-    private void patchEnhancedSecurityCtlModels(ServerModel serverModel) {
-        for (BasicDataAttribute bda : serverModel.getBasicDataAttributes()) {
-            if (!"ctlModel".equals(bda.getName()) || bda.getFc() != Fc.CF) continue;
-            if (!(bda instanceof BdaInt8 ctlModelBda)) continue;
-            byte val = ctlModelBda.getValue();
-            if (val == 3) {
-                ctlModelBda.setValue((byte) 1);
-                log.info(
-                        "Patched ctlModel direct-enhanced→direct-normal at {}", bda.getReference());
-            } else if (val == 4) {
-                ctlModelBda.setValue((byte) 2);
-                log.info("Patched ctlModel sbo-enhanced→sbo-normal at {}", bda.getReference());
-            }
         }
     }
 

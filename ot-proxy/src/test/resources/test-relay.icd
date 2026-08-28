@@ -42,6 +42,14 @@
               </DAI>
             </DOI>
           </LN>
+          <!-- Switch controller with sbo-with-enhanced-security (proxy must normalise this) -->
+          <LN lnClass="CSWI" lnType="CSWI1" inst="1" prefix="">
+            <DOI name="Pos">
+              <DAI name="ctlModel">
+                <Val>sbo-with-enhanced-security</Val>
+              </DAI>
+            </DOI>
+          </LN>
         </LDevice>
       </Server>
     </AccessPoint>
@@ -65,6 +73,10 @@
     <LNodeType id="XCBR1" lnClass="XCBR">
       <DO name="Beh" type="INS_1_Beh" />
       <DO name="Pos" type="DPC_1_Pos" />
+    </LNodeType>
+    <LNodeType id="CSWI1" lnClass="CSWI">
+      <DO name="Beh" type="INS_1_Beh" />
+      <DO name="Pos" type="DPC_2_PosEnh" />
     </LNodeType>
 
     <DOType id="INC_1_Mod" cdc="INC">
@@ -105,12 +117,30 @@
       <DA name="ctlModel" type="CtlModels" bType="Enum" fc="CF" />
       <DA name="Oper" type="DPCSelectWithValue_1" bType="Struct" fc="CO" />
     </DOType>
+    <!-- Enhanced-security DPC: SBOw (not SBO) select, Oper carries operTm. -->
+    <DOType id="DPC_2_PosEnh" cdc="DPC">
+      <DA name="stVal" bType="Dbpos" fc="ST" dchg="true" />
+      <DA name="q" bType="Quality" fc="ST" qchg="true" />
+      <DA name="t" bType="Timestamp" fc="ST" />
+      <DA name="ctlModel" type="CtlModels" bType="Enum" fc="CF" />
+      <DA name="SBOw" type="DPCSelectWithValue_1" bType="Struct" fc="CO" />
+      <DA name="Oper" type="DPCOperEnh_1" bType="Struct" fc="CO" />
+    </DOType>
 
     <DAType id="AnalogueValue_1">
       <BDA name="f" bType="FLOAT32" />
     </DAType>
     <DAType id="DPCSelectWithValue_1">
       <BDA name="ctlVal" bType="BOOLEAN" />
+      <BDA name="origin" type="Originator_1" bType="Struct" />
+      <BDA name="ctlNum" bType="INT8U" />
+      <BDA name="T" bType="Timestamp" />
+      <BDA name="Test" bType="BOOLEAN" />
+      <BDA name="Check" bType="Check" />
+    </DAType>
+    <DAType id="DPCOperEnh_1">
+      <BDA name="ctlVal" bType="BOOLEAN" />
+      <BDA name="operTm" bType="Timestamp" />
       <BDA name="origin" type="Originator_1" bType="Struct" />
       <BDA name="ctlNum" bType="INT8U" />
       <BDA name="T" bType="Timestamp" />
