@@ -14,8 +14,10 @@ sudo chmod 666 /var/run/docker.sock
 cp /tmp/assets/docker-compose.yml ~/docker-compose.yml
 cp /tmp/assets/mysettings.json ~/mysettings.json
 
-# Pre-pull the FUXA image
-docker compose pull --quiet
+# Pre-pull the FUXA image. --quiet drops the progress bars, but Compose still
+# prints "Pulling"/"Pulled" status lines to stderr; silence those too. A real
+# pull failure still aborts the build via `set -e`.
+docker compose pull --quiet 2>/dev/null
 
 # Install the run wrapper
 cp /tmp/assets/run.sh ~/run.sh
