@@ -189,8 +189,6 @@
           path: "{{ share_path }}"
           description: "Corporate shared documents"
           list: yes
-          full: []
-          change: []
           read:
             - "Authenticated Users"
           state: present
