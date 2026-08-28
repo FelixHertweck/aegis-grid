@@ -112,69 +112,41 @@
   retries: 10
   delay: 30
 
-# Short polls so a dropped one costs a retry, not the build; breaks out
-# early when stdout is missing since that means the box is gone (expected).
-- name: Heads-up before the disruption window
-  ansible.builtin.debug:
-    msg: "Sysprep /generalize tears down WinRM and reboots/powers off the box - connection errors below are expected and handled by the checks that follow."
+# A successful Sysprep powers the box off, so there is no verdict to poll
+# for - the box never coming back is the success signal. Sit out the whole
+# window without touching it, then let the reconnect decide: still up means
+# something went wrong and the marker says what.
+- name: Sit out the Sysprep window
+  ansible.builtin.pause:
+    seconds: 360
 
-- name: Wait for Sysprep to report a verdict
-  ansible.windows.win_shell: |
-    if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') {
-      (Get-Content 'C:\Windows\Temp\sysprep-result.txt' -Raw).Trim()
-    } else {
-      'PENDING - marker not written yet'
-    }
-  register: sysprep_poll
-  changed_when: false
-  until: sysprep_poll.stdout is not defined or sysprep_poll.stdout is search('OK:|FAILED|TIMEOUT|ERROR')
-  retries: 120
-  delay: 15
-  ignore_unreachable: true
-  ignore_errors: true
-
-- name: See whether the box comes back (a successful Sysprep powers it off)
+- name: See whether the box comes back
   ansible.builtin.wait_for_connection:
-    timeout: 420
+    timeout: 180
     sleep: 20
   register: sysprep_reconnect
-  ignore_unreachable: true
-  ignore_errors: true
-  when: sysprep_poll.stdout is not defined or sysprep_poll.stdout is not search('OK:')
+  # Timing out here is the success case, not a failure.
+  failed_when: false
 
-- name: Read the Sysprep verdict again now that the box is back
+- name: Read the verdict off the box that stayed up
   ansible.windows.win_shell: |
     $m = if (Test-Path 'C:\Windows\Temp\sysprep-result.txt') { (Get-Content 'C:\Windows\Temp\sysprep-result.txt' -Raw).Trim() } else { 'no marker' }
     $s = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').ImageState
     Write-Output "$m | ImageState=$s"
   register: sysprep_final
   changed_when: false
-  until: sysprep_final.stdout is not defined or sysprep_final.stdout is search('OK:|FAILED|TIMEOUT|ERROR|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
-  retries: 120
+  until: sysprep_final.stdout is search('OK:|FAILED|TIMEOUT|ERROR|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
+  retries: 40
   delay: 15
-  ignore_unreachable: true
-  ignore_errors: true
-  when:
-    - sysprep_reconnect.skipped is not defined
-    - sysprep_reconnect is not failed
-    - sysprep_reconnect is reachable
-
-- name: Work out the Sysprep verdict
-  ansible.builtin.set_fact:
-    sysprep_verdict: "{{ (sysprep_poll.stdout | default('')) ~ ' ' ~ (sysprep_final.stdout | default('')) }}"
+  when: sysprep_reconnect.elapsed | int < 180
 
 - name: Sysprep outcome
   ansible.builtin.debug:
-    msg: "{{ sysprep_verdict | trim | default('box powered itself off - the runner reached its shutdown line', true) }}"
+    msg: "{{ sysprep_final.stdout | default('box powered itself off - Sysprep completed', true) | trim }}"
 
-- name: Fail if the Sysprep runner reported a problem
+- name: Fail if Sysprep did not generalize the image
   ansible.builtin.fail:
-    msg: "Sysprep runner reported: {{ sysprep_verdict | trim }} - see C:\\Windows\\System32\\Sysprep\\Panther\\setuperr.log on the build VM"
-  when: sysprep_verdict is search('FAILED|TIMEOUT|ERROR')
-
-- name: Fail if the box is still up but Sysprep never generalized it
-  ansible.builtin.fail:
-    msg: "Sysprep did not complete - state after reconnect: {{ sysprep_verdict | trim | default('unreadable', true) }}"
+    msg: "Sysprep runner reported: {{ sysprep_final.stdout | trim }} - see C:\\Windows\\System32\\Sysprep\\Panther\\setuperr.log on the build VM"
   when:
-    - sysprep_verdict is not search('OK:|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
     - sysprep_final.stdout is defined
+    - sysprep_final.stdout is not search('OK:|IMAGE_STATE_GENERALIZE_RESEAL_TO_OOBE')
