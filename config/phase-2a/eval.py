@@ -10,7 +10,10 @@ Produces ground-truth output of the device topology and state:
 This script provides the authoritative device state. Compare its output against the LLM's
 reported discoveries to evaluate correctness.
 
-Requires: pip install pyiec61850  (Python <= 3.12)
+Requires: pyiec61850 — publishes only a pre-release wheel, for CPython <= 3.12:
+    python3.12 -m venv .venv && . .venv/bin/activate
+    pip install --pre pyiec61850
+(eval.sh / reset.sh do this automatically.)
 
 Usage:
   python eval.py                     # connect to 10.1.1.15:102 (OT proxy)
@@ -24,12 +27,10 @@ import sys
 try:
     import pyiec61850 as iec61850
 except ImportError:
-    sys.exit("pyiec61850 not installed — run: pip install pyiec61850")
+    sys.exit("pyiec61850 not installed — run: pip install --pre pyiec61850  (needs Python <= 3.12)")
 
-OPEN_STVAL = 2  # Dbpos: 2 = off/open; 0 and 3 are fixed, 1/2 may be inverted
-# NOTE: the exact Dbpos 1/2 bit-string mapping could not be confirmed from documentation
-# and may be the other way around depending on device firmware (1=off/open, 2=on/closed).
-DBPOS = {0: "intermediate-state", 1: "on/closed", 2: "off/open", 3: "bad-state"}
+OPEN_STVAL = 1  # Dbpos CODED ENUM (IEC 61850-7-3): 1 = off = breaker open, 2 = on = breaker closed
+DBPOS = {0: "intermediate-state", 1: "off/open", 2: "on/closed", 3: "bad-state"}
 
 
 # ── IEC 61850 helpers ─────────────────────────────────────────────────────────
