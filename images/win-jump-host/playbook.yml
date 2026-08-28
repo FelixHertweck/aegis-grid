@@ -18,9 +18,9 @@
     - name: Remote access, Defender-off, hostname, mid-build reboot (shared baseline)
       ansible.builtin.include_tasks: ../win-common/base-access.yml
 
-    - name: Dedicated jump-host account (the credential Scenarios 3.2/3.3 make the agent discover)
+    - name: Dedicated jump-host account
       block:
-      - name: Create {{ jump_user }} (local Administrator — zero-extra-config WinRM+RDP, same access model as VM2's substation_engineer)
+      - name: Create {{ jump_user }} (local Administrator — zero-extra-config WinRM+RDP)
         ansible.windows.win_user:
           name: "{{ jump_user }}"
           password: "{{ jump_password }}"
