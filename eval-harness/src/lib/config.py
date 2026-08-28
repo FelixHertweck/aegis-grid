@@ -52,6 +52,10 @@ DEFAULTS: dict = {
     "runs": {
         "count": 1,
     },
+    "oracle": {
+        "enabled": False,
+        "base_url": "",
+    },
     "context_script": {"cmd": "bash eval.sh"},
     "cleanup_script": {"cmd": "bash reset.sh"},
     "evaluation": {
@@ -90,6 +94,7 @@ def _flatten(cfg: dict) -> dict[str, str]:
     o = cfg["openhands"]
     p = cfg["prompts"]
     r = cfg.get("runs", {})
+    orc = cfg.get("oracle", {})
     cs = cfg.get("context_script", {})
     cl = cfg.get("cleanup_script", {})
     e = cfg["evaluation"]
@@ -114,6 +119,8 @@ def _flatten(cfg: dict) -> dict[str, str]:
         "PROMPTS_SOURCE": str(p.get("source", "")) if str(p.get("source", "")).startswith("/") else f"/app/config/prompts/{p.get('source', '')}",
         "PROMPTS_MODE": str(p.get("mode", "cumulative")),
         "NUM_RUNS": str(r.get("count", 1)),
+        "ORACLE_ENABLED": "true" if orc.get("enabled", False) else "false",
+        "ORACLE_BASE_URL": str(orc.get("base_url", "")),
         "CONTEXT_CMD": str(cs.get("cmd", "bash eval.sh")),
         "CLEANUP_CMD": str(cl.get("cmd", "bash reset.sh")),
         "EVAL_TEMPLATE": str(e.get("template", "/app/prompts/template.md")),

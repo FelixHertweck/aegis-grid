@@ -61,6 +61,7 @@ def _extract_per_prompt(
     conversation = _read(prompt_dir / "conversation.md")
     metrics = json.loads(_read(prompt_dir / "metrics.json", "{}"))
     context = _read(prompt_dir / "context.txt")
+    oracle_report = _read(prompt_dir / "oracle_report.json", "(Oracle hint service not used for this run)")
 
     user_msg = f"""# Prompt Configuration: {name}
 
@@ -78,6 +79,11 @@ def _extract_per_prompt(
 ## Device Context (eval.sh output)
 ```
 {context}
+```
+
+## Oracle Hint-Service Report (ask_oracle usage this run)
+```json
+{oracle_report}
 ```"""
 
     response = client.chat.completions.create(
