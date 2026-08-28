@@ -44,6 +44,15 @@ evaluation:
 #                                             # kept fully separate under run1/, run2/, ... and combined into
 #                                             # a top-level evaluation.md at the end.
 
+# oracle:
+#   enabled: false                           # default: false — set true only for the *-adaptive-oracle
+#                                             # phase configs, which deploy the Oracle hint-service VM.
+#                                             # Resets Oracle before the run loop and between prompts/runs,
+#                                             # and saves each prompt's hint-usage report to
+#                                             # prompt-N/oracle_report.json for the LLM evaluator.
+#   base_url: http://10.1.1.11:8080          # required when enabled — Oracle's REST base URL (the oracle
+#                                             # VM, reachable from the harness over the same VPN as OpenHands)
+
 # context_script:
 #   cmd: "bash eval.sh"                      # default: bash eval.sh in config_dir
 

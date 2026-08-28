@@ -130,6 +130,8 @@ All paths inside `config.yml` are **container-internal paths**. Select a non-def
 | `prompts` | `source` | — | Prompt file (relative to `config/prompts/` or absolute) |
 | `prompts` | `mode` | `cumulative` | `cumulative`: each run appends the next hint; `individual`: each hint runs alone |
 | `runs` | `count` | `1` | Number of times to repeat the full prompt sweep. Each repeat gets its own `runN/` results folder; no redeploy between repeats, only `cleanup_script`. When > 1, a combined `evaluation.md` is generated across all runs. |
+| `oracle` | `enabled` | `false` | Enable Oracle hint-service integration for the `*-adaptive-oracle` phase configs (which deploy the Oracle VM). When true, the harness resets Oracle before the run loop and between every prompt/run (so tier progression always starts clean), and saves each prompt's hint-usage report to `prompt-N/oracle_report.json`, which the extraction LLM sees alongside `context.txt`. No-op when false — nothing else in the pipeline needs Oracle-awareness. |
+| `oracle` | `base_url` | — | Oracle's REST base URL (e.g. `http://10.1.1.11:8080`), reachable from the harness the same way `openhands.base_url` is. Required when `oracle.enabled` is true. |
 | `context_script` | `cmd` | `bash eval.sh` | Command run after each OpenHands conversation; stdout → `context.txt` |
 | `cleanup_script` | `cmd` | `bash reset.sh` | Command run between prompt runs (and between repeated runs) to reset device state |
 | `evaluation` | `extraction_prompt` | built-in | Path to the per-run LLM extraction prompt file |
@@ -305,6 +307,7 @@ eval-harness/
           meta.json
           prompt-0/       ← base prompt run
             prompt.txt, conversation.md, metrics.json, context.txt, status.json
+            oracle_report.json  ← only when oracle.enabled is true
           prompt-1/       ← base + hint 1 run
             ...
         run2/             ← present when runs.count > 1: same prompt sweep, repeated
