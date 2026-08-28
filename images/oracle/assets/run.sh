@@ -8,6 +8,9 @@ if [ -f "/home/ubuntu/.env" ]; then
   set +a
 fi
 
+# Create the bind-mount source dirs up front so they end up owned by ubuntu
+mkdir -p ~/oracle/content ~/oracle/logs
+
 echo "Starting Oracle..."
 docker compose up -d
 
