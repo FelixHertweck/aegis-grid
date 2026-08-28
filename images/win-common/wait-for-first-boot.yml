@@ -1,0 +1,106 @@
+---
+# Included once, from the first play of every Windows image, right after the
+# VM's first boot. cloudbase-init's own first run is the one disruption in
+# this build we cannot avoid: we have to be connected to disable it, and
+# connecting is exactly what its post-boot reconfiguration (MTU 1442,
+# adapter rename, WinRM listener rebuild - confirmed live via
+# cloudbase-init.log timeline correlation) keeps interrupting. Everything
+# below exists to survive that one unavoidable window; nothing later in the
+# build needs it, because the very last task here disables the service.
+#
+# Verified live (2026-08-28, a dedicated VM boot/reboot experiment): the MTU
+# it sets is a persistent NIC setting, not something reapplied every boot -
+# disabling the service after this point does not affect throughput
+# (measured ~98 MB/s on a real download afterwards, same as with the
+# service left running).
+- name: Wait for WinRM to come up after first boot
+  ansible.builtin.wait_for_connection:
+    timeout: 900
+    sleep: 10
+
+- name: Build the cloudbase-init completion probe
+  ansible.builtin.set_fact:
+    cbi_probe: |
+      $svcs = @(Get-Service -Name 'cloudbase-init*' -ErrorAction SilentlyContinue)
+      if ($svcs.Count -eq 0) { Write-Output 'DONE - no cloudbase-init service on this image'; exit 0 }
+      $busy = @($svcs | Where-Object { $_.Status -ne 'Stopped' })
+      if ($busy.Count -gt 0) {
+        $names = ($busy | ForEach-Object { $_.Name + '=' + $_.Status }) -join ' '
+        Write-Output "RUNNING - $names"
+        exit 0
+      }
+      $boot = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+      $logs = @(Get-ChildItem -ErrorAction SilentlyContinue -Path @(
+        'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\log\*.log',
+        'C:\Program Files (x86)\Cloudbase Solutions\Cloudbase-Init\log\*.log'))
+      if ($logs.Count -eq 0) {
+        $up = ((Get-Date) - $boot).TotalSeconds
+        if ($up -lt 300) { Write-Output ('RUNNING - no log to check, only ' + [int]$up + 's since boot'); exit 0 }
+        Write-Output 'DONE - no cloudbase-init log, settle window elapsed'
+        exit 0
+      }
+      $newest = ($logs | Sort-Object LastWriteTime -Descending)[0]
+      if ($newest.LastWriteTime -lt $boot) {
+        Write-Output ('RUNNING - stopped, but has not logged since boot (' + $newest.LastWriteTime + ' < ' + $boot + ')')
+        exit 0
+      }
+      Write-Output ('DONE - cloudbase-init ran and exited (last log ' + $newest.LastWriteTime + ')')
+
+# Two traps here, both of which bit us. First, the probe must not believe a
+# service that has not started yet (see cbi_probe above). Second, the wait
+# itself gets cut off by the very disruption it is waiting out; that is
+# ignored so the play survives, but nothing then re-checks, so a naive
+# version of this would continue while cloudbase-init was still working.
+# Ansible's until/retries cannot ride through an unreachable result (the
+# until expression references cbi.stdout, which an unreachable result does
+# not have, and that aborts the retry loop), so the recovery has to be
+# explicit: reconnect, probe again, and only the last pass is authoritative.
+- name: Wait for cloudbase-init to finish its first-boot run (pass 1)
+  ansible.windows.win_shell: "{{ cbi_probe }}"
+  register: cbi
+  changed_when: false
+  until: cbi.stdout is defined and cbi.stdout is search('DONE')
+  retries: 60
+  delay: 10
+  ignore_unreachable: true
+  ignore_errors: true
+
+- name: Reconnect after the first-boot cloudbase-init window (pass 1)
+  ansible.builtin.wait_for_connection:
+    timeout: 1800
+    sleep: 15
+
+- name: Wait for cloudbase-init to finish its first-boot run (pass 2)
+  ansible.windows.win_shell: "{{ cbi_probe }}"
+  register: cbi
+  changed_when: false
+  until: cbi.stdout is defined and cbi.stdout is search('DONE')
+  retries: 60
+  delay: 10
+  ignore_unreachable: true
+  ignore_errors: true
+
+- name: Reconnect after the first-boot cloudbase-init window (pass 2)
+  ansible.builtin.wait_for_connection:
+    timeout: 1800
+    sleep: 15
+
+- name: Confirm cloudbase-init is really done with its first-boot run
+  ansible.windows.win_shell: "{{ cbi_probe }}"
+  register: cbi
+  changed_when: false
+  until: cbi.stdout is defined and cbi.stdout is search('DONE')
+  retries: 60
+  delay: 10
+
+# From here on cloudbase-init cannot interrupt anything else in the build:
+# every later WinRM hiccup this session traced back to it ("401 - invalid
+# content type" right after a clean Ansible run, ConnectionResetError
+# mid-download, ConnectTimeoutError after a reboot). Re-enabled right before
+# Sysprep (see win-common/sysprep.yml) so it runs normally on the real
+# customer-facing boot - verified live that it does, correctly, on its own.
+- name: Disable cloudbase-init for the rest of the build
+  ansible.windows.win_service:
+    name: cloudbase-init
+    state: stopped
+    start_mode: disabled
