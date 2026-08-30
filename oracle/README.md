@@ -1,9 +1,10 @@
 # Oracle
 
 An on-demand hint service for the attacker LLM (VM0/OpenHands). Runs as its own service on VM9,
-outside the scenario subnets, reachable only via MCP. Every consultation is logged and
-penalized, feeding a score that measures how autonomously the agent completes a kill chain
-versus how much it leaned on Oracle.
+outside the scenario subnets, reachable only via MCP. Every consultation is logged. The logs are
+the raw material for a later reliance analysis — how autonomously the agent completed a kill
+chain versus how much it leaned on Oracle — but that analysis is a downstream consumer of the
+logs (see "Structured log"); Oracle itself computes no score and enforces no penalty.
 
 This README documents the service that lives in this directory; it does not itself define a
 scenario's actual hint content or deployment config — see "Configuration" below for what's
@@ -34,13 +35,16 @@ ask_oracle(category: str, context: str) -> {
 }
 ```
 
-`category` is **not a fixed taxonomy** — categories are whatever the loaded scenario's content
-defines (one per host, one for the physical relay, whatever the scenario author set up), and can
-change between runs. `list_hint_categories` is how the agent discovers the current list before
-calling `ask_oracle`; `category` must be one of the values it returns. Its `description` and
+`category` is **not enforced by the service** — the categories are whatever the loaded scenario's
+content file defines, and the agent must discover them with `list_hint_categories` before calling
+`ask_oracle` (`category` must be one of the values it returns). The OCELOT scenario content
+(`config/phase-*/oracle-hints.json`) names each category for the specific piece of scenario
+knowledge it covers (`network_endpoint`, `device_identity`, `telemetry_registers`,
+`circuit_breaker_control`, …) — scenario-specific, not a fixed taxonomy — so the logs read
+directly as "what kind of information was missing". Its `description` and
 `tier_count` are metadata only — `tier_count` says how many tiers exist for that category (1-
 indexed, no fixed ceiling), it does not disclose hint content itself. Hint text stays gated
-behind `ask_oracle`, revealed one tier at a time, logged and penalized — `list_hint_categories`
+behind `ask_oracle`, revealed one tier at a time and logged — `list_hint_categories`
 exists so the agent can decide where to spend that budget, not to read the hints for free.
 
 `context` is free text — what the agent already tried and why it believes it's stuck.
@@ -98,34 +102,44 @@ spec assumes.
 
 Everything below is an environment variable read at process startup (`src/config.py`) — the
 same convention as `ot-proxy.env` / `openhands.env` elsewhere in this repo. **The actual per-run
-values for a real scenario deployment are authored separately** — this README documents the
-schema, not the values.
+values for a real scenario deployment are authored separately** (in the OCELOT testbed:
+`config/phase-*/`, wired by the scenario's `*-adaptive-oracle.json5` — see "Content") — this
+README documents the schema, not the values.
 
 | Variable | Meaning |
 |---|---|
-| `ORACLE_SCENARIO` | Which scenario's content to load (`scenario-3.1` / `-3.2` / `-3.3`) |
+| `ORACLE_SCENARIO` | Scenario key — the wrapper loads exactly `$ORACLE_CONTENT_DIR/$ORACLE_SCENARIO.json`. OCELOT phase deployments set `phase-1a` … `phase-2b`; the bundled local-dev example uses `scenario-3.1`. |
 | `ORACLE_HOST` / `ORACLE_PORT` | Bind address for the MCP server (default `0.0.0.0:8080`) |
 | `ORACLE_LOG_DIR` | Where per-session structured JSONL logs are written (default `/var/log/oracle`) |
-| `ORACLE_CONTENT_DIR` | Where `<scenario>.json` is mounted (default `/app/content`) |
+| `ORACLE_CONTENT_DIR` | Directory the `<scenario>.json` file is mounted into (image default `/app/content`; the CAVE VM mounts it under `~/oracle/content`) |
 
 See [`.env.example`](.env.example) for a filled-in local-dev shape of this table.
 
 ## Content
 
 Not baked into the image — mounted at deploy time, read once at process startup (a container
-restart is needed to pick up a change; content does not reload live per request). Authored here
-as the source of truth:
+restart is needed to pick up a change; content does not reload live per request). The wrapper
+reads exactly one file, `$ORACLE_CONTENT_DIR/$ORACLE_SCENARIO.json` (`src/content.py`).
 
-- `content/hints/<scenario>.json` — read directly by the wrapper from `$ORACLE_CONTENT_DIR`
-  (`src/content.py`). Schema:
-  ```json
-  {"categories": [{"name": ..., "description": ..., "hints": ["...", "...", ...]}]}
-  ```
-  one entry per category — a category can be anything scenario-appropriate (a specific host, the
-  physical relay, ...), not a fixed enum. `hints` is ordered ascending by tier (`hints[0]` is
-  tier 1, the shallowest) and can be any length — there's no fixed 3-tier cap.
-  `description` is what `list_hint_categories` surfaces to the agent before it spends any hint
-  budget — write it to say what the category covers, not to leak the hints themselves.
+**Where that file is authored:**
+
+- **OCELOT testbed** — the source of truth is `config/phase-<X>/oracle-hints.json`. The
+  scenario's `phase-<X>-adaptive-oracle.json5` mounts it into the Oracle VM as
+  `~/oracle/content/phase-<X>.json` and starts the wrapper with `ORACLE_SCENARIO=phase-<X>`.
+- **Standalone / local dev** — this directory: `content/hints/<scenario>.json` (e.g. the bundled
+  `scenario-3.1.json`), mounted to `/app/content` by `docker compose` — see "Local development".
+
+Schema (identical in both cases):
+```json
+{"categories": [{"name": ..., "description": ..., "hints": ["...", "...", ...]}]}
+```
+one entry per category. In the OCELOT content the `name` identifies a specific piece of scenario
+knowledge (see "MCP interface" above); the service itself accepts any string. `hints` is ordered ascending by tier (`hints[0]`
+is tier 1, the shallowest) and can be any length — there's no fixed 3-tier cap. Tiers should be
+**graded**: tier 1 a strategic nudge, deeper tiers progressively more specific, the last close to
+an operational walkthrough. `description` is what `list_hint_categories` surfaces to the agent
+before it spends any hint budget — write it to say what the category covers, not to leak the
+hints themselves.
 
 ## Local development
 
@@ -143,9 +157,11 @@ for that.
 Every granted `ask_oracle` call (rejections — unknown category, tiers exhausted — are never
 logged) appends one line to `$ORACLE_LOG_DIR/<session_id>.jsonl`
 (`src/logging_store.py`, schema in `src/models.py: OracleLogEntry`) — `session_id, category,
-tier, context, hint, timestamp`. This log, plus a run's scenario success score, is the
-input to hint-penalty scoring, which lives outside this service since it's a cross-referencing
-consumer of the log rather than something Oracle needs to compute about itself.
+tier, context, hint, timestamp`. That is all Oracle records. Turning this log (together with a
+run's scenario outcome) into a reliance or hint-penalty metric is left entirely to whoever
+consumes it — e.g. an evaluation study that defines its own weighting over categories and tiers
+and computes the metric offline, manually or with an LLM. Oracle neither defines nor computes
+such a metric; it only guarantees the log is complete and attributable.
 
 ## Reporting: `GET /report`, `GET /sessions`, `POST /reset`
 
@@ -181,8 +197,11 @@ than reset in place, but nothing stops using this there too.
 
 ## Status
 
-MCP plumbing, the request/response logic, and the structured log are implemented. **Not yet
-done:** scenario content for the real scenarios, external scoring, and pilot calibration of the
-penalty schedule and tier rules. The session-header assumption (`Mcp-Session-Id` sent/echoed by
-the client per the Streamable HTTP spec) hasn't been verified against the pinned OpenHands MCP
+MCP plumbing, the request/response logic, the structured log, and the scenario hint content
+(`config/phase-*/oracle-hints.json`, scenario-specific categories, graded tiers per category)
+are implemented. **Not yet done:** a pilot to check that the
+per-category tier counts and the request-count auto-escalation behave sensibly against a real
+agent. Any reliance/penalty scoring over the logs is a downstream concern (see "Structured log")
+and is out of scope for this service. The session-header assumption (`Mcp-Session-Id` sent/echoed
+by the client per the Streamable HTTP spec) hasn't been verified against the pinned OpenHands MCP
 client yet — verify before a real pilot run.
