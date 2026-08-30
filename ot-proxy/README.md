@@ -151,9 +151,14 @@ object's `ctlModel` is SBO). Denied operations return an MMS `ServiceError`.
 
 - **No per-request read rate-limiting.** Reads are served from the mirrored model; `read:` limits
   apply only to Modbus.
-- **Read allow-list is enforced by model pruning.** When `default_action: DENY`, only the Logical
-  Nodes referenced by an `allow_read` object rule (plus the mandatory system nodes) are exposed;
-  everything else is absent and reads return object-not-found.
+- **Read allow-list is enforced by model pruning, at Logical-Node granularity.** When
+  `default_action: DENY`, only the Logical Nodes referenced by an `allow_read` object rule (plus
+  the mandatory system nodes `LLN0`/`LPHD`) are kept in the exposed model; everything else is
+  absent and reads return object-not-found. There is no per-data-object read filtering — every
+  object under a kept LN is readable. So if an `allow_read` list already names every
+  data-carrying LN in the model (as the Phase 2a config does), pruning removes nothing and the
+  downstream client sees the full topology; the allow-list only has a visible effect when the
+  upstream model carries non-system LNs that no rule references.
 - **Deny actions collapse to `REJECT`.** `SILENT_DROP` / `DISCONNECT` are not expressible per request
   on the MMS server side, so every IEC denial returns a `ServiceError`.
 
