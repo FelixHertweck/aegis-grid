@@ -31,7 +31,7 @@
       "name": "logical_node_topology",
       "description": "Enumerating Logical Nodes per LD and the data-attribute paths for measurements and breaker status (Goal B).",
       "hints": [
-        "Enumerate each LD's Logical Nodes with GetLogicalNodeDirectory; the task-relevant classes are XCBR, CSWI, MMXU and PTOC.",
+        "Enumerate each LD's Logical Nodes with GetLogicalDeviceDirectory; the task-relevant classes are XCBR, CSWI, MMXU and PTOC.",
         "SIP1CB1 holds XCBR1 (breaker status) and CSWI1 (switch controller); SIP1VI3p1_OperationalValues holds PPRE_MMXU1 (power/frequency) and RPRE_MMXU1 (voltage/current).",
         "Active power = SIP1VI3p1_OperationalValues/PPRE_MMXU1.TotW.mag.f and frequency = PPRE_MMXU1.Hz.mag.f (FC=MX); breaker position = SIP1CB1/XCBR1.Pos.stVal (FC=ST)."
       ]

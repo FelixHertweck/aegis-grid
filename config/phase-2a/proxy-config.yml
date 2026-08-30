@@ -1,17 +1,22 @@
 # IEC 61850 proxy config — Phase 2a
-# Protects the SIPROTEC 5 emulator against unauthorised circuit breaker operates.
+# Protects a physical Siemens SIPROTEC 5 IED against unauthorised circuit breaker operates.
+# The agent reaches only this proxy; the physical device sits upstream, off the lab network.
 #
-# Object references map to the emulator's data model (relay.icd, IED name SIP1):
+# Object references use the SIPROTEC 5 data model (IED name SIP1); the Phase 2b emulator
+# (relay.icd) mirrors the same references:
 #   SIP1CB1/XCBR1.Pos                          — circuit breaker (ctlModel=status-only)
-#   SIP1CB1/CSWI1.Pos                          — switch controller (actual control path)
+#   SIP1CB1/CSWI1.Pos                          — switch controller (actual control path;
+#                                                ctlModel=4 sbo-enhanced on the device,
+#                                                normalised to 2 sbo-normal downstream)
 #   SIP1VI3p1_OperationalValues/PPRE_MMXU1.*   — power/frequency (Hz, TotW)
 #   SIP1VI3p1_OperationalValues/RPRE_MMXU1.*   — currents/voltages (A, PPV)
 #   SIP1VI3p1_5051OC3phase1/ID_PTOC1.*         — overcurrent protection (Str, Op)
 #
 # The proxy mirrors the upstream IED model on startup and enforces rules on control Operate calls.
-# Read allow-list is enforced by model pruning: objects not listed here are absent from the
-# exposed model (clients receive object-not-found). Operates on allowed objects with allow_write:true
-# are forwarded to the IED; denied ones return an MMS ServiceError.
+# Operates on allowed objects with allow_write:true are forwarded to the IED; denied ones return
+# an MMS ServiceError. The read allow-list below names every data-carrying Logical Node, so the
+# LN-granularity model pruning removes nothing: the full 21-LD topology stays enumerable and
+# readable, same as Phase 2b (see ot-proxy/README.md "IEC 61850 limitations").
 
 protocol: iec61850
 
@@ -20,7 +25,10 @@ proxy:
     host: 0.0.0.0
     port: 102               # MMS port the proxy binds to
   upstream:
-    host: protection-relay  # hostname of the upstream IED — use Docker service name or IP
+    # Address of the physical SIPROTEC 5 as reachable from the ot-proxy VM. MUST be set before
+    # deploying Phase 2a — "protection-relay" is the Phase 2b emulator's Docker service name and
+    # is only a placeholder here.
+    host: protection-relay
     port: 102               # MMS port of the upstream IED
 
 rules:
