@@ -26,8 +26,8 @@ class HintContent(BaseModel):
 
 class CategoryInfo(BaseModel):
     """One entry in `list_hint_categories`'s response — metadata only, so the agent can decide
-    where to spend its (penalized) hint budget before it has revealed anything. `tier_count` is
-    how many tiers this category has; hint content itself stays gated behind `ask_oracle`."""
+    where to spend its hint budget before it has revealed anything. `tier_count` is how many
+    tiers this category has; hint content itself stays gated behind `ask_oracle`."""
 
     category: str
     description: str
